@@ -136,6 +136,7 @@ intersphinx_mapping = {
 
 # MyST options for working with markdown files.
 # Info about extensions here https://myst-parser.readthedocs.io/en/latest/syntax/optional.html?highlight=math#admonition-directives # noqa: E501
+myst_heading_anchors = 3  # auto-generate anchors for H1–H3, enabling #slug cross-refs
 myst_enable_extensions = [
     "dollarmath",
     "amsmath",
