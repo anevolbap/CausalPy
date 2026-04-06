@@ -251,7 +251,8 @@ class BaseExperiment(ABC):
             (ITS/SC only, ignored for DiD/RD)
         min_effect : float, optional
             Region of Practical Equivalence (ROPE) threshold (PyMC only, ignored for OLS).
-            If provided, reports P(|effect| > min_effect) for two-sided or P(effect > min_effect) for one-sided.
+            If provided, reports ``P(|effect| > min_effect)`` for two-sided or
+            ``P(effect > min_effect)`` for one-sided.
         treated_unit : str, optional
             For multi-unit experiments (Synthetic Control), specify which treated unit
             to analyze. If None and multiple units exist, uses first unit.
