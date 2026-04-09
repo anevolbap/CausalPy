@@ -164,8 +164,6 @@ If you use CausalPy in your research, please cite it. A Zenodo DOI for stable re
 
 Plans for the repository can be seen in the [Issues](https://github.com/pymc-labs/CausalPy/issues).
 
-<!-- docs-end -->
-
 ## License
 
-[Apache License 2.0](LICENSE)
+[Apache License 2.0](https://github.com/pymc-labs/CausalPy/blob/main/LICENSE)
