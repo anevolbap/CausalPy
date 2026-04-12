@@ -14,5 +14,4 @@
 knowledgebase/index
 api/index
 notebooks/index
-references
 :::
