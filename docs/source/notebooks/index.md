@@ -70,6 +70,7 @@ piecewise_its_pymc.ipynb
 rd_skl.ipynb
 rd_pymc.ipynb
 rd_pymc_drinking.ipynb
+rd_skl_drinking.ipynb
 rd_donut_pymc.ipynb
 :::
 
