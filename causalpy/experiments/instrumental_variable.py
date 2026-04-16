@@ -298,7 +298,7 @@ class InstrumentalVariable(BaseExperiment):
             print(f"    {name: <20}  {round_num(val, round_to)}")
 
         print("\nBayesian coefficients:")
-        posterior = self.idata.posterior
+        posterior = self.idata.posterior  # type: ignore[union-attr]
         for var, dim, labels, stage in [
             ("beta_t", "instruments", self.labels_instruments, "Instrument stage"),
             ("beta_z", "covariates", self.labels, "Outcome stage"),
