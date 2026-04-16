@@ -680,7 +680,7 @@ class PanelRegression(BaseExperiment):
             fe_means = []
             for idx in unit_fe_indices:
                 fe_means.append(
-                    float(beta.sel(coeffs=self.labels[idx]).mean(dim=["chain", "draw"]))
+                    beta.sel(coeffs=self.labels[idx]).mean(dim=["chain", "draw"]).item()
                 )
 
             ax.hist(
