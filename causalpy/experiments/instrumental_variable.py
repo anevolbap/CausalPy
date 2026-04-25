@@ -278,7 +278,6 @@ class InstrumentalVariable(BaseExperiment):
         :param round_to:
             Number of decimals used to round results. Defaults to 2. Use "None" to return raw numbers
         """
-        round_to = round_to or 2
         print(f"{self.expt_type:=^80}")
         print(f"Formula: {self.formula}")
         print(f"Instruments formula: {self.instruments_formula}")
