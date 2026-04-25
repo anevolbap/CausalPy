@@ -119,10 +119,7 @@ def run_notebook(notebook_path: Path, *, full: bool = False) -> None:
     mode = "full" if full else "mock"
     logging.info(f"Running notebook ({mode}): {notebook_path.name}")
 
-    nb = load_notebook_node(str(notebook_path))
-
     if full:
-        clear_cell_outputs(nb.cells)
         papermill.execute_notebook(
             input_path=str(notebook_path),
             output_path=str(notebook_path),
@@ -132,6 +129,7 @@ def run_notebook(notebook_path: Path, *, full: bool = False) -> None:
         )
         return
 
+    nb = load_notebook_node(str(notebook_path))
     inject_mock_code(nb.cells)
 
     temp_path: Path | None = None
