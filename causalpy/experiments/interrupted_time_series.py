@@ -1015,7 +1015,7 @@ class InterruptedTimeSeries(BaseExperiment):
 
     def analyze_persistence(
         self,
-        hdi_prob: float = 0.95,
+        hdi_prob: float = HDI_PROB,
         direction: Literal["increase", "decrease", "two-sided"] = "increase",
     ) -> dict[str, Any]:
         """Analyze effect persistence between intervention and post-intervention periods.
@@ -1030,8 +1030,9 @@ class InterruptedTimeSeries(BaseExperiment):
 
         Parameters
         ----------
-        hdi_prob : float, default=0.95
-            Probability for HDI interval (Bayesian models only)
+        hdi_prob : float
+            Probability for the HDI interval (Bayesian models only). Defaults
+            to :data:`~causalpy.constants.HDI_PROB` (currently 0.94).
         direction : {"increase", "decrease", "two-sided"}, default="increase"
             Direction for tail probability calculation (Bayesian models only)
 
