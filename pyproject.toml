@@ -160,6 +160,10 @@ extend-select = [
     "SIM", # flake8-simplify - suggest simpler code
 ]
 
+[tool.ruff.lint.per-file-ignores]
+# Notebooks display dataframes via bare expressions on the last line of a cell.
+"*.ipynb" = ["B018"]
+
 [tool.codespell]
 ignore-words = "./docs/source/.codespell/codespell-whitelist.txt"
 skip = "*.ipynb,*.csv,*.svg,pyproject.toml,docs/source/.codespell/codespell-whitelist.txt"
