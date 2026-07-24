@@ -466,6 +466,24 @@ def test_plot_posterior_over_x_default_behavior(synthetic_posterior_data):
 
 
 @pytest.mark.integration
+def test_plot_posterior_over_x_default_ribbon_matches_line_color_after_prior_artist(
+    synthetic_posterior_data,
+):
+    """Default bands use the same colour as their line after the axes cycle advances."""
+    x, Y = synthetic_posterior_data
+    fig, ax = plt.subplots()
+    ax.plot(x, np.zeros(len(x)))
+
+    h_line, h_patch = plot_posterior_over_x(x, Y, ax=ax)
+
+    np.testing.assert_allclose(
+        h_patch.get_facecolor()[0],
+        to_rgba(h_line.get_color(), alpha=0.3),
+    )
+    plt.close(fig)
+
+
+@pytest.mark.integration
 def test_plot_posterior_over_x_backward_compatibility_hdi_prob(
     synthetic_posterior_data,
 ):

@@ -217,20 +217,21 @@ def _plot_ribbon(
     line_kwargs = plot_hdi_kwargs.copy()
     line_kwargs.pop("fill_kwargs", None)
 
-    h_patch = _plot_interval_band(
-        x,
-        Y,
-        ax,
-        ci_prob=ci_prob,
-        ci_kind=ci_kind,
-        plot_hdi_kwargs=plot_hdi_kwargs,
-    )
     (h_line,) = ax.plot(
         x,
         Y.mean(dim=["chain", "draw"]),
         ls="-",
         **line_kwargs,
         label=label,
+    )
+    band_kwargs = {**plot_hdi_kwargs, "color": h_line.get_color()}
+    h_patch = _plot_interval_band(
+        x,
+        Y,
+        ax,
+        ci_prob=ci_prob,
+        ci_kind=ci_kind,
+        plot_hdi_kwargs=band_kwargs,
     )
     return h_line, h_patch
 
