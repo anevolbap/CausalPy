@@ -400,6 +400,24 @@ def test_print_coefficients_without_scalar_parameters(capsys):
     )
 
 
+def test_print_coefficients_skips_non_scalar_parameters(capsys):
+    """Only scalar posterior variables are reported as model parameters."""
+    model = make_forecast_model()
+    posterior = xr.Dataset(
+        {
+            "sigma": (("chain", "draw"), np.ones((1, 2))),
+            "latent": (("chain", "draw", "time"), np.ones((1, 2, 3))),
+        }
+    )
+    model.idata = xr.DataTree.from_dict({"posterior": posterior})
+
+    model.print_coefficients([])
+
+    output = capsys.readouterr().out
+    assert "sigma" in output
+    assert "latent" not in output
+
+
 @pytest.mark.integration
 def test_three_period_design(its_data):
     """treatment_end_time splitting works on the forecast backend's output."""
@@ -408,7 +426,7 @@ def test_three_period_design(its_data):
         df,
         treatment_time,
         formula="y ~ 1 + t",
-        model=make_forecast_model(),
+        model=make_fast_forecast_model(),
         treatment_end_time=df.index[85],
     )
     assert result.intervention_pred.posterior_predictive["mu"].sizes["obs_ind"] == 15
@@ -509,6 +527,23 @@ def test_to_inference_data_yields_datatree_posterior_predictive():
         pp["mu"].coords["obs_ind"].values.astype("datetime64[ns]"),
         obs_ind.astype("datetime64[ns]"),
     )
+
+
+def test_to_inference_data_renames_series_dimension():
+    """Upstream multi-series predictions retain their unit coordinate."""
+    model = make_forecast_model()
+    obs_ind = pd.date_range("2020-01-01", periods=3, freq="D").to_numpy()
+    samples = xr.DataArray(
+        np.ones((1, 2, 3, 2)),
+        dims=("chain", "draw", "obs_ind", "series"),
+        coords={"series": ["unit_a", "unit_b"]},
+    )
+
+    out = model._to_inference_data(samples, samples.copy(), obs_ind)
+
+    pp = out["posterior_predictive"]
+    assert pp["mu"].dims == ("chain", "draw", "obs_ind", "treated_units")
+    assert list(pp["mu"].treated_units.values) == ["unit_a", "unit_b"]
 
 
 @pytest.mark.integration
