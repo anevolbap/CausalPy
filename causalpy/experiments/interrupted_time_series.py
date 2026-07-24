@@ -14,7 +14,7 @@
 """Interrupted Time Series Analysis."""
 
 import warnings
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import arviz as az
 import numpy as np
@@ -24,6 +24,7 @@ from matplotlib import pyplot as plt
 from patsy import build_design_matrices
 from sklearn.base import RegressorMixin
 
+from causalpy._arviz_compat import hdi_bounds
 from causalpy.constants import HDI_PROB, LEGEND_FONT_SIZE
 from causalpy.custom_exceptions import BadIndexException
 from causalpy.date_utils import _combine_datetime_indices, format_date_axes
@@ -455,8 +456,6 @@ class InterruptedTimeSeries(BaseExperiment):
         EffectSummary
             Object with .table (DataFrame) and .text (str) attributes
         """
-        from causalpy.reporting import _extract_hdi_bounds
-
         is_pymc = self._model_backend.is_bayesian
         time_dim = "obs_ind"
         hdi_prob = 1 - alpha
@@ -466,15 +465,13 @@ class InterruptedTimeSeries(BaseExperiment):
             # PyMC: Compute statistics for both periods
             intervention_avg = self.intervention_impact.mean(dim=time_dim)
             intervention_mean = _as_scalar(intervention_avg.mean(dim=["chain", "draw"]))
-            intervention_hdi = az.hdi(intervention_avg, hdi_prob=hdi_prob)
-            intervention_lower, intervention_upper = _extract_hdi_bounds(
-                intervention_hdi, hdi_prob
+            intervention_lower, intervention_upper = hdi_bounds(
+                intervention_avg, prob=hdi_prob
             )
 
             post_avg = self.post_intervention_impact.mean(dim=time_dim)
             post_mean = _as_scalar(post_avg.mean(dim=["chain", "draw"]))
-            post_hdi = az.hdi(post_avg, hdi_prob=hdi_prob)
-            post_lower, post_upper = _extract_hdi_bounds(post_hdi, hdi_prob)
+            post_lower, post_upper = hdi_bounds(post_avg, prob=hdi_prob)
 
             # Persistence ratio: post_mean / intervention_mean (as percentage)
             epsilon = 1e-8
@@ -702,12 +699,19 @@ class InterruptedTimeSeries(BaseExperiment):
         edge case. Returns the matplotlib ``ErrorbarContainer`` so callers can use
         it as a legend handle.
         """
-        Y_plot = Y.isel(treated_units=0) if "treated_units" in Y.dims else Y
+        Y_plot = Y
+        if "treated_units" in Y_plot.dims:
+            Y_plot = Y_plot.isel(treated_units=0)
+        if "obs_ind" in Y_plot.dims:
+            if Y_plot.sizes["obs_ind"] != 1:
+                msg = (
+                    "Singleton HDI marker requires exactly one obs_ind; "
+                    f"got size {Y_plot.sizes['obs_ind']}"
+                )
+                raise ValueError(msg)
+            Y_plot = Y_plot.isel(obs_ind=0)
         median = float(np.asarray(Y_plot.median(("chain", "draw")).values).item())
-        hdi = az.hdi(Y_plot, hdi_prob=hdi_prob)
-        data_var = list(hdi.data_vars)[0]
-        bounds = np.asarray(hdi[data_var].values).reshape(-1)
-        lower, upper = float(bounds[0]), float(bounds[1])
+        lower, upper = hdi_bounds(Y_plot, prob=hdi_prob)
         return ax.errorbar(
             x,
             [median],
@@ -801,7 +805,11 @@ class InterruptedTimeSeries(BaseExperiment):
             # errorbar artist itself as the legend handle so the legend
             # matches what is actually drawn.
             errbar = self._draw_singleton_hdi_marker(
-                ax[0], self.datapost.index, post_mu, color="C1"
+                ax[0],
+                self.datapost.index,
+                post_mu,
+                color="C1",
+                hdi_prob=ci_prob,
             )
             handles.append(errbar)
         else:
@@ -883,7 +891,11 @@ class InterruptedTimeSeries(BaseExperiment):
         )
         if single_post_obs:
             self._draw_singleton_hdi_marker(
-                ax[1], self.datapost.index, self.post_impact, color="C1"
+                ax[1],
+                self.datapost.index,
+                self.post_impact,
+                color="C1",
+                hdi_prob=ci_prob,
             )
         ax[1].axhline(y=0, c="k")
         post_impact_mean = (
@@ -922,7 +934,11 @@ class InterruptedTimeSeries(BaseExperiment):
         )
         if single_post_obs:
             self._draw_singleton_hdi_marker(
-                ax[2], self.datapost.index, self.post_impact_cumulative, color="C1"
+                ax[2],
+                self.datapost.index,
+                self.post_impact_cumulative,
+                color="C1",
+                hdi_prob=ci_prob,
             )
         ax[2].axhline(y=0, c="k")
 
@@ -1150,35 +1166,26 @@ class InterruptedTimeSeries(BaseExperiment):
             pre_data["impact"] = pre_impact_mean.values
             post_data["impact"] = post_impact_mean.values
 
-            # Compute impact HDIs directly via quantiles over posterior dims to avoid column shape issues
-            alpha = 1 - hdi_prob
-            lower_q = alpha / 2
-            upper_q = 1 - alpha / 2
+            pre_impact_hdi = get_hdi_to_df(self.pre_impact, hdi_prob=hdi_prob)
+            post_impact_hdi = get_hdi_to_df(self.post_impact, hdi_prob=hdi_prob)
+            if (
+                isinstance(pre_impact_hdi.index, pd.MultiIndex)
+                and "treated_units" in pre_impact_hdi.index.names
+            ):
+                pre_impact_hdi = cast(
+                    pd.DataFrame,
+                    pre_impact_hdi.xs("unit_0", level="treated_units"),
+                )
+                post_impact_hdi = cast(
+                    pd.DataFrame,
+                    post_impact_hdi.xs("unit_0", level="treated_units"),
+                )
 
-            pre_lower_da = self.pre_impact.quantile(lower_q, dim=["chain", "draw"])
-            pre_upper_da = self.pre_impact.quantile(upper_q, dim=["chain", "draw"])
-            post_lower_da = self.post_impact.quantile(lower_q, dim=["chain", "draw"])
-            post_upper_da = self.post_impact.quantile(upper_q, dim=["chain", "draw"])
-
-            # If a treated_units dim remains for some models, select unit_0
-            if hasattr(pre_lower_da, "dims") and "treated_units" in pre_lower_da.dims:
-                pre_lower_da = pre_lower_da.sel(treated_units="unit_0")
-                pre_upper_da = pre_upper_da.sel(treated_units="unit_0")
-            if hasattr(post_lower_da, "dims") and "treated_units" in post_lower_da.dims:
-                post_lower_da = post_lower_da.sel(treated_units="unit_0")
-                post_upper_da = post_upper_da.sel(treated_units="unit_0")
-
-            pre_data[impact_lower_col] = (
-                pre_lower_da.to_series().reindex(pre_data.index).values
+            pre_data[[impact_lower_col, impact_upper_col]] = pre_impact_hdi.reindex(
+                pre_data.index
             )
-            pre_data[impact_upper_col] = (
-                pre_upper_da.to_series().reindex(pre_data.index).values
-            )
-            post_data[impact_lower_col] = (
-                post_lower_da.to_series().reindex(post_data.index).values
-            )
-            post_data[impact_upper_col] = (
-                post_upper_da.to_series().reindex(post_data.index).values
+            post_data[[impact_lower_col, impact_upper_col]] = post_impact_hdi.reindex(
+                post_data.index
             )
 
             self.plot_data = pd.concat([pre_data, post_data])
@@ -1274,21 +1281,17 @@ class InterruptedTimeSeries(BaseExperiment):
 
         if is_pymc:
             # PyMC: Compute statistics using xarray operations
-            from causalpy.reporting import _extract_hdi_bounds
-
             # Intervention period
             intervention_avg = self.intervention_impact.mean(dim=time_dim)
             intervention_mean = _as_scalar(intervention_avg.mean(dim=["chain", "draw"]))
-            intervention_hdi = az.hdi(intervention_avg, hdi_prob=hdi_prob)
-            intervention_lower, intervention_upper = _extract_hdi_bounds(
-                intervention_hdi, hdi_prob
+            intervention_lower, intervention_upper = hdi_bounds(
+                intervention_avg, prob=hdi_prob
             )
 
             # Post-intervention period
             post_avg = self.post_intervention_impact.mean(dim=time_dim)
             post_mean = _as_scalar(post_avg.mean(dim=["chain", "draw"]))
-            post_hdi = az.hdi(post_avg, hdi_prob=hdi_prob)
-            post_lower, post_upper = _extract_hdi_bounds(post_hdi, hdi_prob)
+            post_lower, post_upper = hdi_bounds(post_avg, prob=hdi_prob)
 
             # Cumulative (total) impacts
             intervention_cum = self.intervention_impact_cumulative.isel({time_dim: -1})

@@ -28,6 +28,8 @@ import pandas as pd
 import pytest
 import xarray as xr
 
+from causalpy._arviz_compat import hdi_bounds
+from causalpy.constants import HDI_PROB
 from causalpy.custom_exceptions import BadIndexException
 from causalpy.experiments.synthetic_difference_in_differences import (
     SyntheticDifferenceInDifferences,
@@ -384,6 +386,65 @@ class TestSummaryMultiTreated:
         captured = capsys.readouterr().out
         assert "Treated units: ['t0', 't1']" in captured
         assert "Treated unit:" not in captured
+
+
+class TestSummaryHdiPooling:
+    """``summary`` pools raw ``(chain, draw)`` tau through ``hdi_bounds``."""
+
+    def test_summary_hdi_pools_chain_draw_ndarray(self, capsys):
+        """Frozen pooled 94% HDI for a seeded raw ``tau_posterior`` array.
+
+        Uses the same draws as the compat helper baseline. Per-chain bounds
+        differ, so a missing ``flatten_chains_draws=True`` cannot match.
+        """
+        rng = np.random.default_rng(42)
+        samples = rng.normal(loc=2.0, scale=1.0, size=(4, 200))
+        stub = _make_experiment_stub(
+            control_units=["c0"],
+            treated_units=["t0"],
+        )
+        stub.expt_type = "SyntheticDifferenceInDifferences"
+        stub.tau_posterior = xr.DataArray(samples, dims=["chain", "draw"])
+
+        expected_lower = 0.21329248863192207
+        expected_upper = 3.8478250129560454
+        chain0_lower, _ = hdi_bounds(samples[0], prob=HDI_PROB)
+        assert round(expected_lower, 2) != round(chain0_lower, 2)
+
+        stub.summary()
+        captured = capsys.readouterr().out
+        assert (
+            f"94% HDI: [{round(expected_lower, 2)}, {round(expected_upper, 2)}]"
+            in captured
+        )
+
+    def test_summary_passes_flatten_chains_draws(self, monkeypatch, capsys):
+        seen: dict[str, object] = {}
+
+        def fake_hdi_bounds(data, *, prob=None, flatten_chains_draws=False, **kwargs):
+            seen["prob"] = prob
+            seen["flatten_chains_draws"] = flatten_chains_draws
+            seen["shape"] = np.asarray(data).shape
+            return -1.25, 4.5
+
+        monkeypatch.setattr(
+            "causalpy.experiments.synthetic_difference_in_differences.hdi_bounds",
+            fake_hdi_bounds,
+        )
+        stub = _make_experiment_stub(
+            control_units=["c0"],
+            treated_units=["t0"],
+        )
+        stub.expt_type = "SyntheticDifferenceInDifferences"
+        stub.tau_posterior = xr.DataArray(
+            np.zeros((2, 5)),
+            dims=["chain", "draw"],
+        )
+        stub.summary()
+        assert seen["flatten_chains_draws"] is True
+        assert seen["prob"] == HDI_PROB
+        assert seen["shape"] == (2, 5)
+        assert "94% HDI: [-1.25, 4.5]" in capsys.readouterr().out
 
 
 class TestConvertTreatmentTimeForAxis:
