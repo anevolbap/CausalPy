@@ -436,7 +436,9 @@ class TestStateSpaceTimeSeriesCoverage:
             sample_kwargs={"draws": 10, "tune": 10, "progressbar": False}
         )
 
-        with pytest.raises(ValueError, match="supports exactly one treated unit, got 2"):
+        with pytest.raises(
+            ValueError, match="supports exactly one treated unit, got 2"
+        ):
             model.build_model(y=y_multi)
 
     def test_build_model_rejects_empty_treated_units(self, sample_data):
@@ -453,7 +455,9 @@ class TestStateSpaceTimeSeriesCoverage:
             sample_kwargs={"draws": 10, "tune": 10, "progressbar": False}
         )
 
-        with pytest.raises(ValueError, match="supports exactly one treated unit, got 0"):
+        with pytest.raises(
+            ValueError, match="supports exactly one treated unit, got 0"
+        ):
             model.build_model(y=y_empty)
 
     def test_build_model_requires_treated_units_dimension(self, sample_data):

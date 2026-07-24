@@ -531,9 +531,7 @@ class VariableSelectionPrior:
             raise ValueError(f"Could not find '{lambda_tilde_name}' in posterior")
 
         tau = az.extract(idata, group="posterior", var_names=tau_name)
-        lambda_tilde = az.extract(
-            idata, group="posterior", var_names=lambda_tilde_name
-        )
+        lambda_tilde = az.extract(idata, group="posterior", var_names=lambda_tilde_name)
         shrinkage_factor = (tau * lambda_tilde).mean(dim="sample")
         lambda_tilde_mean = lambda_tilde.mean(dim="sample")
 

@@ -14,7 +14,6 @@
 
 import contextlib
 
-import arviz as az
 import numpy as np
 import pandas as pd
 import pymc as pm

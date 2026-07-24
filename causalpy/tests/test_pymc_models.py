@@ -190,8 +190,6 @@ class TestPyMCModel:
         assert "unit_0_r2_std" in score.index
         assert isinstance(predictions, xr.DataTree)
 
-
-
     def test_predict_preserves_datetime_obs_ind(self, rng, mock_pymc_sample):
         """Predict reattaches the caller's datetime coordinates to the DataTree."""
         dates = pd.date_range("2024-01-01", periods=8, freq="D")
@@ -408,8 +406,6 @@ def test_prior_merge_adds_groups_without_overwriting_sample_groups():
     )
 
 
-
-
 def test_propensity_score_fit_returns_datatree_groups(mock_pymc_sample):
     """Propensity fitting retains posterior, prior predictive, and PPC groups."""
     X = np.ones((8, 1))
@@ -428,8 +424,6 @@ def test_propensity_score_fit_returns_datatree_groups(mock_pymc_sample):
     assert {"posterior", "prior_predictive", "posterior_predictive"} <= set(
         idata.children
     )
-
-
 
 
 def test_propensity_fit_outcome_model_returns_datatree(mock_pymc_sample):

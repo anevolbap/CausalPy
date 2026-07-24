@@ -68,6 +68,7 @@ def _call_seasonality_component_apply(
     """Call seasonality components across tensor and xtensor variants."""
     return _call_time_component_apply(seasonality_component, dayofperiod)
 
+
 def _extend_datatree_left(idata: xr.DataTree, other: xr.DataTree) -> xr.DataTree:
     """Add DataTree groups without replacing groups already in ``idata``."""
     for group, node in other.children.items():
@@ -76,14 +77,10 @@ def _extend_datatree_left(idata: xr.DataTree, other: xr.DataTree) -> xr.DataTree
     return idata
 
 
-def _assign_group_coords(
-    idata: xr.DataTree, group: str, **coords: Any
-) -> xr.DataTree:
+def _assign_group_coords(idata: xr.DataTree, group: str, **coords: Any) -> xr.DataTree:
     """Assign coordinates to a DataTree group through its Dataset."""
     idata[group] = idata[group].to_dataset().assign_coords(**coords)
     return idata
-
-
 
 
 class PyMCModel(pm.Model):

@@ -18,7 +18,6 @@ Synthetic Difference-in-Differences Experiment.
 import warnings
 from typing import Any, Literal
 
-import arviz as az
 import numpy as np
 import pandas as pd
 import xarray as xr
