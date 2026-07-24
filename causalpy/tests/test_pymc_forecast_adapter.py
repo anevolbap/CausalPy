@@ -582,6 +582,11 @@ def test_approximate_forecasters_fit_and_predict_datatrees(
     assert model.forecaster.is_fitted
     assert isinstance(model.idata, xr.DataTree)
     assert model.idata.posterior.sizes["draw"] == num_samples
+    if forecaster is pymc_forecast.Forecaster:
+        with pytest.raises(AttributeError, match="does not retain a full DataTree"):
+            _ = model.fit_idata
+    else:
+        assert isinstance(model.fit_idata, xr.DataTree)
     assert list(result.score.index) == ["unit_0_r2", "unit_0_r2_std"]
     for pred, expected_index in (
         (result.pre_pred, result.datapre.index),
