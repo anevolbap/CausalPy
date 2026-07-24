@@ -66,6 +66,13 @@ sample_kwargs = {
     "chains": 2,
 }
 
+fast_sample_kwargs = {
+    "draws": 100,
+    "tune": 100,
+    "chains": 2,
+    "progressbar": False,
+}
+
 TRUE_EFFECT = 2.0
 
 
@@ -116,6 +123,16 @@ def make_forecast_model():
         linear_model,
         forecaster_kwargs=dict(sample_kwargs),
         num_samples=200,
+        random_seed=42,
+    )
+
+
+def make_fast_forecast_model():
+    """Small HMC schedule for forecast-placebo control-flow tests."""
+    return PyMCForecastModel(
+        linear_model,
+        forecaster_kwargs=dict(fast_sample_kwargs),
+        num_samples=50,
         random_seed=42,
     )
 
@@ -370,6 +387,19 @@ def test_print_coefficients_before_fit_raises():
         make_forecast_model().print_coefficients([])
 
 
+def test_print_coefficients_without_scalar_parameters(capsys):
+    """Time-varying forecasting latents do not require scalar parameters."""
+    model = make_forecast_model()
+    posterior = xr.Dataset({"latent": (("chain", "draw", "time"), np.ones((1, 2, 3)))})
+    model.idata = xr.DataTree.from_dict({"posterior": posterior})
+
+    model.print_coefficients([])
+
+    assert capsys.readouterr().out == (
+        "Model parameters:\n  (no scalar parameters in posterior)\n"
+    )
+
+
 @pytest.mark.integration
 def test_three_period_design(its_data):
     """treatment_end_time splitting works on the forecast backend's output."""
@@ -509,7 +539,7 @@ class TestPlaceboInTime:
         from causalpy.checks.base import clone_model
 
         df, _ = its_data
-        base_model = forecast_result.model
+        base_model = make_fast_forecast_model()
 
         def factory(data, treatment_time):
             return cp.InterruptedTimeSeries(
@@ -522,12 +552,7 @@ class TestPlaceboInTime:
         check = cp.checks.PlaceboInTime(
             n_folds=2,
             experiment_factory=factory,
-            sample_kwargs={
-                "draws": 100,
-                "tune": 100,
-                "chains": 2,
-                "progressbar": False,
-            },
+            sample_kwargs=dict(fast_sample_kwargs),
             random_seed=42,
         )
         result = check.run(forecast_result)
@@ -543,7 +568,7 @@ class TestPlaceboInTime:
     ):
         """The PipelineContext factory path preserves the forecast backend."""
         df, treatment_time = its_data
-        configured_model = make_forecast_model()
+        configured_model = make_fast_forecast_model()
         context = cp.PipelineContext(data=df)
         context.experiment = forecast_result
         context.experiment_config = {
@@ -555,12 +580,7 @@ class TestPlaceboInTime:
 
         check = cp.checks.PlaceboInTime(
             n_folds=1,
-            sample_kwargs={
-                "draws": 100,
-                "tune": 100,
-                "chains": 2,
-                "progressbar": False,
-            },
+            sample_kwargs=dict(fast_sample_kwargs),
             random_seed=42,
         )
         result = check.run(forecast_result, context)
