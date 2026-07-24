@@ -99,6 +99,119 @@ def test_get_hdi_to_df_with_coordinate_dimensions():
     assert result["higher"].max() < 7.0, "HDI upper bounds should be reasonable"
 
 
+def test_get_hdi_to_df_drops_scalar_treated_units_coord():
+    """Scalar treated_units coords must not appear as columns or index levels."""
+    rng = np.random.default_rng(7)
+    da = xr.DataArray(
+        rng.normal(loc=1.0, scale=0.25, size=(2, 50, 3)),
+        dims=["chain", "draw", "obs_ind"],
+        coords={
+            "obs_ind": np.arange(3),
+            "treated_units": "treated_agg",
+        },
+    )
+
+    result = get_hdi_to_df(da, hdi_prob=0.94)
+
+    assert list(result.columns) == ["lower", "higher"]
+    assert "treated_units" not in result.columns
+    assert "treated_units" not in list(result.index.names)
+    assert result.index.names == ["obs_ind"]
+    assert result["lower"].dtype.kind == "f"
+    assert result["higher"].dtype.kind == "f"
+
+
+def test_get_hdi_to_df_chain_draw_only_uses_default_probability():
+    """A scalar posterior returns a one-row numeric frame at CausalPy's 0.94 HDI."""
+    draws = xr.DataArray(
+        np.random.default_rng(42).normal(size=(2, 200)),
+        dims=["chain", "draw"],
+        coords={"treated_units": "treated_agg"},
+    )
+
+    result = get_hdi_to_df(draws)
+
+    assert list(result.columns) == ["lower", "higher"]
+    assert result.shape == (1, 2)
+    assert tuple(result.iloc[0]) == pytest.approx(
+        (-1.7577283913566313, 1.732311605409944),
+        rel=1e-12,
+        abs=1e-12,
+    )
+
+
+def test_get_hdi_to_df_preserves_empty_non_sample_index():
+    draws = xr.DataArray(
+        np.empty((2, 40, 0)),
+        dims=["chain", "draw", "obs_ind"],
+        coords={"obs_ind": []},
+    )
+
+    result = get_hdi_to_df(draws)
+
+    assert result.empty
+    assert list(result.columns) == ["lower", "higher"]
+    assert result.columns.name is None
+    assert result.index.name == "obs_ind"
+
+
+def test_get_hdi_to_df_retains_dimensional_treated_units_index():
+    """Dimensional treated_units must remain as an index level after conversion."""
+    rng = np.random.default_rng(11)
+    da = xr.DataArray(
+        rng.normal(size=(2, 40, 2, 2)),
+        dims=["chain", "draw", "obs_ind", "treated_units"],
+        coords={
+            "obs_ind": [0, 1],
+            "treated_units": ["unit_a", "unit_b"],
+        },
+    )
+
+    result = get_hdi_to_df(da, hdi_prob=0.94)
+
+    assert list(result.columns) == ["lower", "higher"]
+    assert result.index.names == ["obs_ind", "treated_units"]
+    assert list(result.index.get_level_values("treated_units").unique()) == [
+        "unit_a",
+        "unit_b",
+    ]
+
+
+def test_get_hdi_to_df_preserves_non_sample_row_order():
+    """Row order must follow the non-sample dimension coordinate order."""
+    rng = np.random.default_rng(19)
+    obs_order = np.array([4, 1, 3, 2])
+    da = xr.DataArray(
+        rng.normal(size=(2, 30, len(obs_order))),
+        dims=["chain", "draw", "obs_ind"],
+        coords={"obs_ind": obs_order},
+    )
+
+    result = get_hdi_to_df(da, hdi_prob=0.94)
+
+    assert list(result.index) == list(obs_order)
+    assert result.index.name == "obs_ind"
+
+
+def test_get_hdi_to_df_positional_bounds_are_lower_higher():
+    """Exact columns ['lower', 'higher'] keep iloc[:, 0] / iloc[:, -1] semantics."""
+    rng = np.random.default_rng(23)
+    da = xr.DataArray(
+        rng.normal(loc=0.0, scale=1.0, size=(2, 80, 5)),
+        dims=["chain", "draw", "obs_ind"],
+        coords={"obs_ind": np.arange(5)},
+    )
+
+    result = get_hdi_to_df(da, hdi_prob=0.94)
+
+    assert list(result.columns) == ["lower", "higher"]
+    np.testing.assert_allclose(result.iloc[:, 0].to_numpy(), result["lower"].to_numpy())
+    np.testing.assert_allclose(
+        result.iloc[:, -1].to_numpy(), result["higher"].to_numpy()
+    )
+    assert (result.iloc[:, 0] <= result.iloc[:, -1]).all()
+
+
 @pytest.fixture
 def synthetic_posterior_data():
     """Create synthetic posterior data for testing plot_posterior_over_x."""

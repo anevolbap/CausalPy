@@ -28,6 +28,7 @@ from matplotlib.collections import PolyCollection
 from matplotlib.lines import Line2D
 from pandas.api.extensions import ExtensionArray
 
+from causalpy._arviz_compat import hdi
 from causalpy.constants import HDI_PROB
 
 
@@ -414,17 +415,28 @@ def get_hdi_to_df(
         DataFrame containing the HDI intervals with 'lower' and 'higher'
         columns.
     """
-    hdi_result = az.hdi(x, hdi_prob=hdi_prob)
+    hdi_result = hdi(x, prob=hdi_prob)
+    # Drop non-dimension coordinates (e.g. scalar treated_units) so they do not
+    # become DataFrame columns after unstack — regression for #532.
+    hdi_result = hdi_result.reset_coords(drop=True)
+    if hdi_result.dims == ("hdi",):
+        return pd.DataFrame(
+            [hdi_result.sel(hdi=["lower", "higher"]).values],
+            columns=["lower", "higher"],
+        )
 
-    # Get the data variable name (typically 'mu' or 'x')
-    # We select only the data variable column to exclude coordinates like 'treated_units'
-    data_var = list(hdi_result.data_vars)[0]
+    lower = hdi_result.sel(hdi="lower")
+    if any(lower.sizes[dim] == 0 for dim in lower.dims):
+        return pd.DataFrame(
+            index=lower.to_dataframe(name="lower").index,
+            columns=["lower", "higher"],
+            dtype=float,
+        )
 
-    # Convert to DataFrame, select only the data variable column, then unstack
-    # This prevents coordinate values (like 'treated_agg') from appearing as columns
-    hdi_df = hdi_result[data_var].to_dataframe()[[data_var]].unstack(level="hdi")
-
-    # Remove the top level of column MultiIndex to get just 'lower' and 'higher'
+    hdi_df = hdi_result.to_dataframe(name="hdi_value")[["hdi_value"]].unstack(
+        level="hdi"
+    )
     hdi_df.columns = hdi_df.columns.droplevel(0)
-
-    return hdi_df
+    hdi_df.columns.name = None
+    # Force deterministic column order for SC iloc[:, [0, -1]] consumers
+    return hdi_df[["lower", "higher"]]

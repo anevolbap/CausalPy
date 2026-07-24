@@ -916,37 +916,71 @@ def test_effect_summary_did_hdi_coverage(mock_pymc_sample, did_data):
 # ==============================================================================
 
 
-def test_extract_hdi_bounds_dataset():
-    """Test _extract_hdi_bounds with xr.Dataset input."""
+def test_compute_statistics_scalar_hdi_golden_unmonkeypatched():
+    """Approved fixed-seed HDI golden via reporting scalar helpers (no monkeypatch).
+
+    Uses ``default_rng(42).normal(size=(2, 200))`` through
+    ``_compute_statistics_scalar(..., hdi_prob=0.94)`` and
+    ``_generate_table_scalar``. Bounds match the approved baseline to 1e-12.
+    """
     import xarray as xr
 
-    from causalpy.reporting import _extract_hdi_bounds
+    from causalpy.reporting import _compute_statistics_scalar, _generate_table_scalar
 
-    # Create a mock HDI result as Dataset
-    data = xr.DataArray([1.0, 3.0], dims=["hdi"], coords={"hdi": ["lower", "higher"]})
-    hdi_dataset = xr.Dataset({"effect": data})
+    rng = np.random.default_rng(42)
+    effect = xr.DataArray(rng.normal(size=(2, 200)), dims=["chain", "draw"])
+    stats = _compute_statistics_scalar(effect, hdi_prob=0.94)
+    table = _generate_table_scalar(stats)
 
-    lower, upper = _extract_hdi_bounds(hdi_dataset)
-
-    assert lower == 1.0
-    assert upper == 3.0
-
-
-def test_extract_hdi_bounds_dataarray():
-    """Test _extract_hdi_bounds with xr.DataArray input."""
-    import xarray as xr
-
-    from causalpy.reporting import _extract_hdi_bounds
-
-    # Create a mock HDI result as DataArray
-    hdi_dataarray = xr.DataArray(
-        [1.0, 3.0], dims=["hdi"], coords={"hdi": ["lower", "higher"]}
+    assert stats["hdi_lower"] == pytest.approx(
+        -1.7577283913566313, rel=1e-12, abs=1e-12
+    )
+    assert stats["hdi_upper"] == pytest.approx(1.732311605409944, rel=1e-12, abs=1e-12)
+    assert table.loc["effect", "hdi_lower"] == pytest.approx(
+        -1.7577283913566313, rel=1e-12, abs=1e-12
+    )
+    assert table.loc["effect", "hdi_upper"] == pytest.approx(
+        1.732311605409944, rel=1e-12, abs=1e-12
     )
 
-    lower, upper = _extract_hdi_bounds(hdi_dataarray)
 
-    assert lower == 1.0
-    assert upper == 3.0
+def test_compute_statistics_scalar_singleton_treated_units():
+    """Singleton ``treated_units`` must squeeze through scalar HDI reporting."""
+    import xarray as xr
+
+    from causalpy.reporting import _compute_statistics_scalar, _generate_table_scalar
+
+    rng = np.random.default_rng(42)
+    effect = xr.DataArray(
+        rng.normal(size=(2, 200, 1)),
+        dims=["chain", "draw", "treated_units"],
+        coords={"treated_units": ["unit_a"]},
+    )
+    stats = _compute_statistics_scalar(effect, hdi_prob=0.94)
+    table = _generate_table_scalar(stats)
+
+    assert stats["hdi_lower"] == pytest.approx(
+        -1.7577283913566313, rel=1e-12, abs=1e-12
+    )
+    assert stats["hdi_upper"] == pytest.approx(1.732311605409944, rel=1e-12, abs=1e-12)
+    assert isinstance(stats["mean"], float)
+    assert isinstance(table.loc["effect", "hdi_lower"], float)
+
+
+def test_compute_statistics_scalar_unreduced_treated_units_raises():
+    """Unreduced multi-value ``treated_units`` must fail closed in scalar reporting."""
+    import xarray as xr
+
+    from causalpy.reporting import _compute_statistics_scalar
+
+    rng = np.random.default_rng(42)
+    effect = xr.DataArray(
+        rng.normal(size=(2, 50, 2)),
+        dims=["chain", "draw", "treated_units"],
+        coords={"treated_units": ["a", "b"]},
+    )
+    with pytest.raises(ValueError):
+        _compute_statistics_scalar(effect, hdi_prob=0.94)
 
 
 def test_as_scalar_handles_singleton_arrays():
@@ -1090,6 +1124,58 @@ def test_compute_statistics_rope_decrease():
     assert stats["cum"]["p_rope"] > 0.95
 
 
+def test_compute_statistics_time_series_hdi_golden():
+    """ArviZ 0.22 94% HDIs for a frozen average/cumulative/relative table."""
+    import xarray as xr
+
+    from causalpy.reporting import _compute_statistics, _generate_table
+
+    rng = np.random.default_rng(123)
+    impact = xr.DataArray(
+        rng.normal(size=(2, 200, 3)),
+        dims=["chain", "draw", "obs_ind"],
+    )
+    counterfactual = xr.DataArray(
+        10 + rng.normal(size=(2, 200, 3)),
+        dims=["chain", "draw", "obs_ind"],
+    )
+
+    table = _generate_table(
+        _compute_statistics(
+            impact,
+            counterfactual,
+            hdi_prob=0.94,
+            cumulative=True,
+            relative=True,
+        )
+    )
+
+    assert tuple(table.loc["average", ["hdi_lower", "hdi_upper"]]) == pytest.approx(
+        (-1.136764984172878, 1.1654528765047945),
+        rel=1e-12,
+        abs=1e-12,
+    )
+    assert tuple(table.loc["cumulative", ["hdi_lower", "hdi_upper"]]) == pytest.approx(
+        (-3.4102949525186337, 3.496358629514383),
+        rel=1e-12,
+        abs=1e-12,
+    )
+    assert tuple(
+        table.loc["average", ["relative_hdi_lower", "relative_hdi_upper"]]
+    ) == pytest.approx(
+        (-11.11634243961037, 12.08950890903512),
+        rel=1e-12,
+        abs=1e-12,
+    )
+    assert tuple(
+        table.loc["cumulative", ["relative_hdi_lower", "relative_hdi_upper"]]
+    ) == pytest.approx(
+        (-11.116342446857432, 12.089508916593045),
+        rel=1e-12,
+        abs=1e-12,
+    )
+
+
 def test_compute_statistics_with_singleton_treated_unit_dim():
     """Regression test for singleton dims surviving reductions in xarray workflows."""
     import xarray as xr
@@ -1123,44 +1209,33 @@ def test_compute_statistics_with_singleton_treated_unit_dim():
     assert isinstance(stats["cum"]["relative_mean"], float)
 
 
-def test_compute_statistics_hdi_dataarray_paths(monkeypatch):
-    """Exercise _compute_statistics branches where az.hdi returns a DataArray."""
+def test_compute_statistics_unreduced_treated_units_raises():
+    """Unreduced multi-value ``treated_units`` must fail in time-series reporting."""
     import xarray as xr
 
-    from causalpy import reporting as reporting_mod
+    from causalpy.reporting import _compute_statistics
 
-    def fake_hdi(_obj, hdi_prob=0.95):
-        _ = hdi_prob
-        return xr.DataArray(
-            [0.1, 0.9], dims=["hdi"], coords={"hdi": ["lower", "higher"]}
-        )
-
-    monkeypatch.setattr(reporting_mod.az, "hdi", fake_hdi)
-
+    rng = np.random.default_rng(0)
     impact = xr.DataArray(
-        np.random.normal(1.0, 0.1, (2, 20, 4)),
-        dims=["chain", "draw", "obs_ind"],
-        coords={"obs_ind": [0, 1, 2, 3]},
+        rng.normal(loc=1.0, scale=0.1, size=(2, 20, 4, 2)),
+        dims=["chain", "draw", "obs_ind", "treated_units"],
+        coords={"obs_ind": [0, 1, 2, 3], "treated_units": ["a", "b"]},
     )
     counterfactual = xr.DataArray(
-        np.ones((2, 20, 4)) * 10.0,
-        dims=["chain", "draw", "obs_ind"],
-        coords={"obs_ind": [0, 1, 2, 3]},
+        np.ones((2, 20, 4, 2)) * 10.0,
+        dims=["chain", "draw", "obs_ind", "treated_units"],
+        coords={"obs_ind": [0, 1, 2, 3], "treated_units": ["a", "b"]},
     )
 
-    stats = reporting_mod._compute_statistics(
-        impact,
-        counterfactual,
-        hdi_prob=0.95,
-        direction="two-sided",
-        cumulative=True,
-        relative=True,
-    )
-
-    assert isinstance(stats["avg"]["hdi_lower"], float)
-    assert isinstance(stats["cum"]["hdi_lower"], float)
-    assert isinstance(stats["avg"]["relative_hdi_lower"], float)
-    assert isinstance(stats["cum"]["relative_hdi_lower"], float)
+    with pytest.raises(ValueError):
+        _compute_statistics(
+            impact,
+            counterfactual,
+            hdi_prob=0.94,
+            direction="two-sided",
+            cumulative=True,
+            relative=True,
+        )
 
 
 def test_extract_window_ols_xarray_post_impact_branch():

@@ -738,6 +738,13 @@ def test_piecewise_its_pymc_get_plot_data(mock_pymc_sample):
     assert "fitted" in plot_data.columns
     assert "counterfactual" in plot_data.columns
     assert "effect" in plot_data.columns
+    for series in ["fitted", "counterfactual", "effect", "cumulative_effect"]:
+        lower = f"{series}_hdi_lower_94"
+        upper = f"{series}_hdi_upper_94"
+        assert lower in plot_data.columns
+        assert upper in plot_data.columns
+        assert len(plot_data[lower]) == len(plot_data)
+        assert (plot_data[lower] <= plot_data[upper]).all()
 
 
 @pytest.mark.integration
@@ -1134,6 +1141,8 @@ def test_piecewise_its_pymc_get_plot_data_custom_hdi(mock_pymc_sample):
     assert "effect_hdi_upper_89" in plot_data.columns
     assert "cumulative_effect_hdi_lower_89" in plot_data.columns
     assert "cumulative_effect_hdi_upper_89" in plot_data.columns
+    assert "counterfactual_hdi_lower_89" in plot_data.columns
+    assert "counterfactual_hdi_upper_89" in plot_data.columns
 
 
 @pytest.mark.integration
@@ -1650,3 +1659,64 @@ def test_ramp_transform_datetime_series():
     result = transform.transform(x, threshold)
     expected = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 2.0, 3.0, 4.0])
     np.testing.assert_array_equal(result, expected)
+
+
+def test_piecewise_plot_data_uses_hdi_for_skewed_draws(monkeypatch):
+    """Piecewise plot-data intervals retain the frozen 94% HDI, not an ETI."""
+    from types import SimpleNamespace
+
+    import xarray as xr
+
+    rng = np.random.default_rng(99)
+
+    def draws():
+        return xr.DataArray(
+            rng.exponential(size=(2, 200, 2)),
+            dims=["chain", "draw", "obs_ind"],
+        )
+
+    y_pred_mu, y_cf_mu, effect, cumulative_effect = [draws() for _ in range(4)]
+    result = SimpleNamespace(
+        time_col="time",
+        outcome_variable_name="y",
+        data=pd.DataFrame({"time": [0, 1]}),
+        design=xr.Dataset(
+            {"y": xr.DataArray([[0.0], [0.0]], dims=["obs_ind", "treated_units"])}
+        ),
+        y_pred={"posterior_predictive": {"mu": y_pred_mu}},
+        y_counterfactual={"posterior_predictive": {"mu": y_cf_mu}},
+        effect=effect,
+        cumulative_effect=cumulative_effect,
+    )
+    from causalpy.experiments import piecewise_its as piecewise_module
+
+    probabilities = []
+    original_hdi_bound_arrays = piecewise_module.hdi_bound_arrays
+
+    def capture_hdi_bound_arrays(data, *, prob):
+        probabilities.append(prob)
+        return original_hdi_bound_arrays(data, prob=prob)
+
+    monkeypatch.setattr(piecewise_module, "hdi_bound_arrays", capture_hdi_bound_arrays)
+
+    plot_data = cp.PiecewiseITS.get_plot_data_bayesian(result)
+    observed = plot_data[["fitted_hdi_lower_94", "fitted_hdi_upper_94"]].to_numpy()
+    expected = np.array(
+        [
+            [0.0007371251826613078, 2.9971247523110627],
+            [0.0017155005389564901, 3.0300947898215806],
+        ]
+    )
+    eti = np.quantile(y_pred_mu.values, [0.03, 0.97], axis=(0, 1)).T
+
+    np.testing.assert_allclose(observed, expected, rtol=1e-12, atol=1e-12)
+    assert not np.allclose(observed, eti)
+    custom_plot_data = cp.PiecewiseITS.get_plot_data_bayesian(result, hdi_prob=0.89)
+
+    assert probabilities == [0.94] * 4 + [0.89] * 4
+    assert {
+        "fitted_hdi_lower_89",
+        "counterfactual_hdi_lower_89",
+        "effect_hdi_lower_89",
+        "cumulative_effect_hdi_lower_89",
+    }.issubset(custom_plot_data.columns)
