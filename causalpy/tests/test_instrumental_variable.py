@@ -15,8 +15,12 @@
 Tests for the InstrumentalVariable experiment class.
 """
 
+import builtins
+
+import arviz as az
 import numpy as np
 import pandas as pd
+import pymc as pm
 import pytest
 import xarray as xr
 
@@ -82,6 +86,229 @@ def binary_treatment_data(rng):
         "formula": "y ~ 1 + T + Z1",
         "instruments_formula": "T ~ 1 + Z1 + Z2",
     }
+
+
+# =============================================================================
+# Test Sampling Defaults
+# =============================================================================
+
+
+@pytest.mark.parametrize(
+    ("sample_kwargs", "expected_cores"),
+    [
+        (None, 1),
+        ({}, 1),
+        ({"cores": None}, 1),
+        ({"cores": 2}, 2),
+        ({"cores": 0}, 0),
+    ],
+)
+def test_iv_sampling_defaults_copy_and_preserve_overrides(
+    sample_kwargs, expected_cores
+):
+    """Test IV sampling defaults are safe without changing caller configuration."""
+    original = None if sample_kwargs is None else dict(sample_kwargs)
+
+    model = cp.pymc_models.InstrumentalVariableRegression(sample_kwargs=sample_kwargs)
+
+    assert model.sample_kwargs["cores"] == expected_cores
+    if sample_kwargs is not None:
+        assert sample_kwargs == original
+        assert model.sample_kwargs is not sample_kwargs
+
+
+def test_iv_sampling_default_does_not_change_other_pymc_models():
+    """Test the temporary sampling default is limited to IV models."""
+    assert "cores" not in cp.pymc_models.LinearRegression().sample_kwargs
+
+
+def test_iv_default_sampling_kwargs_are_forwarded_without_ppc(monkeypatch):
+    """Test default IV sampling uses one core and skips posterior prediction."""
+    sampled_kwargs = {}
+    idata = az.InferenceData()
+
+    def sample(**kwargs):
+        sampled_kwargs.update(kwargs)
+        return idata
+
+    def posterior_predictive(*args, **kwargs):
+        pytest.fail("ppc_sampler=None must skip posterior predictive sampling")
+
+    monkeypatch.setattr(pm, "sample", sample)
+    monkeypatch.setattr(pm, "sample_posterior_predictive", posterior_predictive)
+    model = cp.pymc_models.InstrumentalVariableRegression(
+        sample_kwargs={"draws": 7, "tune": 3, "progressbar": False}
+    )
+    X = np.array([[1.0, 0.5], [1.0, 1.5]])
+    Z = np.array([[1.0, 0.2], [1.0, 0.8]])
+    y = np.array([[1.0], [2.0]])
+    t = np.array([[0.5], [1.5]])
+
+    model.fit(
+        X=X,
+        Z=Z,
+        y=y,
+        t=t,
+        coords={"instruments": ["Intercept", "Z"], "covariates": ["Intercept", "X"]},
+        priors={
+            "mus": [[0.0, 0.0], [0.0, 0.0]],
+            "sigmas": [1.0, 1.0],
+            "eta": 2,
+            "lkj_sd": 1,
+        },
+    )
+
+    assert sampled_kwargs["cores"] == 1
+    assert sampled_kwargs["draws"] == 7
+    assert sampled_kwargs["tune"] == 3
+    assert sampled_kwargs["progressbar"] is False
+    assert model.idata is idata
+
+
+def test_iv_default_model_uses_safe_sampling_kwargs(monkeypatch, iv_data):
+    """Test the experiment's default IV model receives the safe core default."""
+    sampled_kwargs = {}
+
+    def sample(**kwargs):
+        sampled_kwargs.update(kwargs)
+        return az.InferenceData()
+
+    monkeypatch.setattr(pm, "sample", sample)
+
+    result = cp.InstrumentalVariable(
+        instruments_data=iv_data["instruments_data"],
+        data=iv_data["data"],
+        instruments_formula=iv_data["instruments_formula"],
+        formula=iv_data["formula"],
+    )
+
+    assert result.model.sample_kwargs["cores"] == 1
+    assert sampled_kwargs["cores"] == 1
+
+
+def test_iv_default_sampling_completes_with_two_chains(iv_data):
+    """Test default IV sampling completes safely with two sequential chains."""
+    model = cp.pymc_models.InstrumentalVariableRegression(
+        sample_kwargs={
+            "tune": 5,
+            "draws": 5,
+            "chains": 2,
+            "progressbar": False,
+            "random_seed": 42,
+            "compute_convergence_checks": False,
+        }
+    )
+
+    result = cp.InstrumentalVariable(
+        instruments_data=iv_data["instruments_data"],
+        data=iv_data["data"],
+        instruments_formula=iv_data["instruments_formula"],
+        formula=iv_data["formula"],
+        model=model,
+    )
+
+    assert model.sample_kwargs["cores"] == 1
+    assert result.idata.posterior.sizes["chain"] == 2
+    assert result.idata.posterior.sizes["draw"] == 5
+
+
+def _set_jax_import(monkeypatch, jax_module):
+    """Patch the direct JAX import used by IV posterior prediction."""
+    original_import = builtins.__import__
+
+    def import_jax(name, *args, **kwargs):
+        if name == "jax":
+            if isinstance(jax_module, BaseException):
+                raise jax_module
+            return jax_module
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", import_jax)
+
+
+class _Idata:
+    """Minimal inference-data stand-in for posterior predictive tests."""
+
+    def extend(self, other):
+        """Record posterior predictive output."""
+        self.extended = other
+
+
+@pytest.mark.parametrize("use_default", [True, False])
+def test_iv_jax_ppc_reports_missing_jax_without_fallback(monkeypatch, use_default):
+    """Test requested JAX PPC has a clear missing-dependency error."""
+    model = cp.pymc_models.InstrumentalVariableRegression()
+    model.idata = object()
+    calls = 0
+
+    def posterior_predictive(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+
+    _set_jax_import(monkeypatch, ModuleNotFoundError("No module named 'jax'"))
+    monkeypatch.setattr(pm, "sample_posterior_predictive", posterior_predictive)
+
+    with pytest.raises(ImportError, match="requires JAX"):
+        if use_default:
+            model.sample_predictive_distribution()
+        else:
+            model.sample_predictive_distribution(ppc_sampler="jax")
+
+    assert calls == 0
+
+
+def test_iv_jax_ppc_uses_jax_compilation(monkeypatch):
+    """Test available JAX PPC uses the JAX compilation mode."""
+    model = cp.pymc_models.InstrumentalVariableRegression(
+        sample_kwargs={"random_seed": 42}
+    )
+    model.idata = _Idata()
+    posterior_predictive = object()
+    calls = {}
+    _set_jax_import(monkeypatch, object())
+
+    def sample(idata, **kwargs):
+        calls["idata"] = idata
+        calls.update(kwargs)
+        return posterior_predictive
+
+    monkeypatch.setattr(pm, "sample_posterior_predictive", sample)
+
+    model.sample_predictive_distribution()
+
+    assert calls == {
+        "idata": model.idata,
+        "random_seed": 42,
+        "compile_kwargs": {"mode": "JAX"},
+        "extend_inferencedata": True,
+    }
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        ImportError("PPC import failure"),
+        RuntimeError("PPC runtime failure"),
+        ModuleNotFoundError("PPC module failure"),
+    ],
+)
+@pytest.mark.parametrize("use_default", [True, False])
+def test_iv_jax_ppc_preserves_non_dependency_errors(monkeypatch, use_default, error):
+    """Test JAX PPC failures are not rewritten as missing-JAX errors."""
+    model = cp.pymc_models.InstrumentalVariableRegression()
+    model.idata = _Idata()
+    _set_jax_import(monkeypatch, object())
+
+    def posterior_predictive(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(pm, "sample_posterior_predictive", posterior_predictive)
+
+    with pytest.raises(type(error), match=str(error)):
+        if use_default:
+            model.sample_predictive_distribution()
+        else:
+            model.sample_predictive_distribution(ppc_sampler="jax")
 
 
 # =============================================================================
@@ -548,6 +775,7 @@ def test_iv_default_jax_ppc_mutates_existing_datatree(
     monkeypatch.setattr(
         pm, "sample_posterior_predictive", fake_sample_posterior_predictive
     )
+    _set_jax_import(monkeypatch, object())
     result.model.sample_predictive_distribution()  # default ppc_sampler="jax"
 
     assert result.idata is original_idata

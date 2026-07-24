@@ -88,8 +88,8 @@ class InstrumentalVariable(BaseExperiment):
     >>> sample_kwargs = {
     ...     "tune": 1,
     ...     "draws": 5,
-    ...     "chains": 1,
-    ...     "cores": 4,
+    ...     "chains": 2,
+    ...     "cores": 1,
     ...     "target_accept": 0.95,
     ...     "progressbar": False,
     ... }

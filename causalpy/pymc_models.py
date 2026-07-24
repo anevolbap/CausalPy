@@ -1155,6 +1155,13 @@ class SyntheticDifferenceInDifferencesWeightFitter(PyMCModel):
 class InstrumentalVariableRegression(PyMCModel):
     """Custom PyMC model for instrumental linear regression.
 
+    Parameters
+    ----------
+    sample_kwargs : dict, optional
+        Keyword arguments forwarded to :func:`pymc.sample`.
+    priors : dict, optional
+        Prior configuration used by the model.
+
     Examples
     --------
     >>> import causalpy as cp
@@ -1176,7 +1183,7 @@ class InstrumentalVariableRegression(PyMCModel):
     ...     "tune": 5,
     ...     "draws": 10,
     ...     "chains": 2,
-    ...     "cores": 2,
+    ...     "cores": 1,
     ...     "target_accept": 0.95,
     ...     "progressbar": False,
     ... }
@@ -1197,6 +1204,26 @@ class InstrumentalVariableRegression(PyMCModel):
     ... )
     Inference data...
     """
+
+    def __init__(
+        self,
+        sample_kwargs: dict[str, Any] | None = None,
+        priors: dict[str, Any] | None = None,
+    ) -> None:
+        """Configure IV sampling defaults.
+
+        Parameters
+        ----------
+        sample_kwargs : dict, optional
+            Keyword arguments forwarded to :func:`pymc.sample`.
+        priors : dict, optional
+            Prior configuration passed to the base model.
+        """
+        kwargs = {} if sample_kwargs is None else dict(sample_kwargs)
+        # TEMPORARY: avoid macOS arm64/Python 3.14 PyMC 6.0.1–6.2.0 IV fork-worker crashes (CausalPy #1044, https://github.com/pymc-devs/pymc/issues/8377); remove per #1067 only after the upstream fix is verified and the supported floor excludes this range.
+        if kwargs.get("cores") is None:
+            kwargs["cores"] = 1
+        super().__init__(sample_kwargs=kwargs, priors=priors)
 
     def build_model(  # type: ignore
         self,
@@ -1383,13 +1410,19 @@ class InstrumentalVariableRegression(PyMCModel):
         ----------
         ppc_sampler : {"jax", "pymc"}, optional
             Backend used for posterior predictive sampling. ``"jax"`` (the
-            default) is much faster for the multivariate Normal likelihood;
-            ``"pymc"`` additionally samples the prior predictive.
+            default) requires JAX and samples only the posterior predictive distribution; ``"pymc"`` is the fallback and additionally samples the prior predictive.
         """
         random_seed = self.sample_kwargs.get("random_seed", None)
 
         if ppc_sampler == "jax":
             if self.idata is not None:
+                try:
+                    import jax  # noqa: F401
+                except ModuleNotFoundError as err:
+                    raise ImportError(
+                        "ppc_sampler='jax' requires JAX. Install jax or use "
+                        "ppc_sampler='pymc'."
+                    ) from err
                 with self:
                     pm.sample_posterior_predictive(
                         self.idata,
@@ -1444,7 +1477,7 @@ class InstrumentalVariableRegression(PyMCModel):
         priors : dict
             Prior specification dictionary forwarded to :meth:`build_model`.
         ppc_sampler : {"jax", "pymc"}, optional
-            Backend for posterior predictive sampling. ``None`` skips it.
+            Backend for posterior predictive sampling. ``"jax"`` requires JAX, ``"pymc"`` is the fallback, and ``None`` skips it.
         vs_prior_type : {"spike_and_slab", "horseshoe", "normal"}, optional
             Variable-selection prior type, forwarded to :meth:`build_model`.
         vs_hyperparams : dict, optional
