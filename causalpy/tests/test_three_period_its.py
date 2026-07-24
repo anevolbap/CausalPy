@@ -146,11 +146,10 @@ def test_three_period_pymc_datetime_index(datetime_data, mock_pymc_sample):
     assert isinstance(result.data_post_intervention, pd.DataFrame)
 
     # Check PyMC-specific types
-    import arviz as az
     import xarray as xr
 
-    assert isinstance(result.intervention_pred, az.InferenceData)
-    assert isinstance(result.post_intervention_pred, az.InferenceData)
+    assert isinstance(result.intervention_pred, xr.DataTree)
+    assert isinstance(result.post_intervention_pred, xr.DataTree)
     # For PyMC models, post_impact is always xarray DataArray
     assert isinstance(result.intervention_impact, xr.DataArray)
     assert isinstance(result.post_intervention_impact, xr.DataArray)
@@ -189,11 +188,10 @@ def test_three_period_pymc_integer_index(integer_data, mock_pymc_sample):
     assert isinstance(result.data_post_intervention, pd.DataFrame)
 
     # Check PyMC-specific types
-    import arviz as az
     import xarray as xr
 
-    assert isinstance(result.intervention_pred, az.InferenceData)
-    assert isinstance(result.post_intervention_pred, az.InferenceData)
+    assert isinstance(result.intervention_pred, xr.DataTree)
+    assert isinstance(result.post_intervention_pred, xr.DataTree)
     # For PyMC models, post_impact is always xarray DataArray
     assert isinstance(result.intervention_impact, xr.DataArray)
     assert isinstance(result.post_intervention_impact, xr.DataArray)
@@ -832,19 +830,25 @@ def test_intervention_pred_is_slice_of_post_pred(datetime_data, mock_pymc_sample
         model=cp.pymc_models.LinearRegression(sample_kwargs=sample_kwargs),
     )
 
-    # For PyMC models, check that intervention_pred is InferenceData
-    assert hasattr(result.intervention_pred, "posterior_predictive")
+    # For PyMC models, intervention_pred is a DataTree.
+    import xarray as xr
 
-    # Extract mu from both
+    assert isinstance(result.intervention_pred, xr.DataTree)
+
     intervention_mu = result.intervention_pred.posterior_predictive["mu"]
     post_mu = result.post_pred.posterior_predictive["mu"]
-
-    # Check that intervention_mu is a subset of post_mu
     intervention_coords = result.data_intervention.index
     post_mu_intervention = post_mu.sel(obs_ind=intervention_coords)
 
-    # They should have the same shape
     assert intervention_mu.shape == post_mu_intervention.shape
+    xr.testing.assert_allclose(intervention_mu, post_mu_intervention)
+
+    post_intervention_mu = result.post_intervention_pred.posterior_predictive["mu"]
+    post_intervention_coords = result.data_post_intervention.index
+    xr.testing.assert_allclose(
+        post_intervention_mu,
+        post_mu.sel(obs_ind=post_intervention_coords),
+    )
 
 
 # ==============================================================================

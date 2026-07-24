@@ -22,7 +22,6 @@ individual steps without paying the cost of a full MCMC run.
 from types import SimpleNamespace
 from typing import Any, Protocol
 
-import arviz as az
 import numpy as np
 import pandas as pd
 import pytest
@@ -176,7 +175,7 @@ class TestExtractWeightPosteriors:
                 "omega0": (("chain", "draw"), omega0_true),
             }
         )
-        idata = az.InferenceData(posterior=posterior)
+        idata = xr.DataTree.from_dict({"posterior": posterior})
         stub = _make_experiment_stub(model=SimpleNamespace(idata=idata))
 
         omega, omega0, lam, n_ch, n_dr = stub._extract_weight_posteriors()
@@ -264,12 +263,20 @@ class TestBuildReportingObjects:
 
         stub._build_reporting_objects(sc_all, toy_panel.T_pre, n_chains, n_draws)
 
-        # pre_pred / post_pred are InferenceData with a 'mu' variable in
+        # pre_pred / post_pred are DataTrees with a 'mu' variable in
         # the posterior_predictive group.
-        assert isinstance(stub.pre_pred, az.InferenceData)
-        assert isinstance(stub.post_pred, az.InferenceData)
+        assert isinstance(stub.pre_pred, xr.DataTree)
+        assert isinstance(stub.post_pred, xr.DataTree)
         assert "mu" in stub.pre_pred.posterior_predictive
         assert "mu" in stub.post_pred.posterior_predictive
+        for prediction, index in (
+            (stub.pre_pred, toy_panel.data.index[: toy_panel.T_pre]),
+            (stub.post_pred, toy_panel.data.index[toy_panel.T_pre :]),
+        ):
+            mu = prediction["posterior_predictive"].to_dataset()["mu"]
+            assert mu.dims == ("chain", "draw", "obs_ind", "treated_units")
+            np.testing.assert_array_equal(mu.coords["obs_ind"].values, index.values)
+            assert mu.coords["treated_units"].values.tolist() == toy_panel.treated_units
 
         # pre_impact / post_impact are xr.DataArrays with the correct dims.
         for impact, expected_len in (

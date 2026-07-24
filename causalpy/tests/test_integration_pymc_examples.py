@@ -14,7 +14,6 @@
 
 import contextlib
 
-import arviz as az
 import numpy as np
 import pandas as pd
 import pymc as pm
@@ -1001,7 +1000,7 @@ def test_inverse_prop(mock_pymc_sample):
         weighting_scheme="robust",
         model=cp.pymc_models.PropensityScore(sample_kwargs=sample_kwargs),
     )
-    assert isinstance(result.idata, az.InferenceData)
+    assert isinstance(result.idata, xr.DataTree)
     ps = result.idata.posterior["p"].mean(dim=("chain", "draw"))
     w1, w2, _, _ = result.make_doubly_robust_adjustment(ps)
     assert isinstance(w1, pd.Series)
@@ -1043,7 +1042,9 @@ def test_inverse_prop(mock_pymc_sample):
         normal_outcome=True,
         spline_component=False,
     )
-    assert isinstance(idata_normal, az.InferenceData)
+    assert isinstance(idata_normal, xr.DataTree)
+    assert "prior_predictive" in idata_normal
+    assert "posterior" in idata_normal
     assert isinstance(model_normal, pm.Model)
     assert "beta_" in idata_normal.posterior
     assert "beta_ps" in idata_normal.posterior
@@ -1138,7 +1139,7 @@ def test_bayesian_structural_time_series():
         y=y_da,
         coords=coords_with_x.copy(),  # Pass a copy
     )
-    assert isinstance(model_with_x.idata, az.InferenceData)
+    assert isinstance(model_with_x.idata, xr.DataTree)
     assert "posterior" in model_with_x.idata
     assert "beta" in model_with_x.idata.posterior
     # PyMC Marketing components might use different internal names, e.g. fourier_beta, delta
@@ -1157,7 +1158,7 @@ def test_bayesian_structural_time_series():
         X=X_da,
         coords=coords_with_x,  # Original coords_with_x is fine here
     )
-    assert isinstance(predictions_with_x, az.InferenceData)
+    assert isinstance(predictions_with_x, xr.DataTree)
     score_with_x = model_with_x.score(
         X=X_da,
         y=y_da,
@@ -1195,7 +1196,7 @@ def test_bayesian_structural_time_series():
         y=y_da_no_x,
         coords=coords_no_x.copy(),  # Pass a copy
     )
-    assert isinstance(model_no_x.idata, az.InferenceData)
+    assert isinstance(model_no_x.idata, xr.DataTree)
     assert "posterior" in model_no_x.idata
     assert "beta" not in model_no_x.idata.posterior
     assert "fourier_beta" in model_no_x.idata.posterior
@@ -1206,7 +1207,7 @@ def test_bayesian_structural_time_series():
         X=X_da_no_x,
         coords=coords_no_x,  # Original coords_no_x is fine
     )
-    assert isinstance(predictions_no_x, az.InferenceData)
+    assert isinstance(predictions_no_x, xr.DataTree)
     score_no_x = model_no_x.score(
         X=X_da_no_x,
         y=y_da_no_x,
@@ -1234,13 +1235,13 @@ def test_bayesian_structural_time_series():
         y=y_da_no_x,
         coords=coords_empty_x.copy(),  # Pass a copy
     )
-    assert isinstance(model_empty_x.idata, az.InferenceData)
+    assert isinstance(model_empty_x.idata, xr.DataTree)
 
     predictions_empty_x = model_empty_x.predict(
         X=X_da_no_x,
         coords=coords_empty_x,  # Original coords_empty_x is fine
     )
-    assert isinstance(predictions_empty_x, az.InferenceData)
+    assert isinstance(predictions_empty_x, xr.DataTree)
     score_empty_x = model_empty_x.score(
         X=X_da_no_x,
         y=y_da_no_x,
@@ -1416,7 +1417,7 @@ def test_state_space_time_series():
     )
 
     # Verify inference data structure
-    assert isinstance(idata, az.InferenceData)
+    assert isinstance(idata, xr.DataTree)
     assert "posterior" in idata
     assert "posterior_predictive" in idata
 
@@ -1434,6 +1435,8 @@ def test_state_space_time_series():
     # Check for expected posterior predictive variables
     assert "y_hat" in idata.posterior_predictive
     assert "mu" in idata.posterior_predictive
+    assert "obs_ind" in idata["posterior_predictive"]["y_hat"].dims
+    assert "time" not in idata["posterior_predictive"]["y_hat"].dims
 
     # --- Test Case 2: In-sample prediction --- #
     # Create dummy X for in-sample prediction (state-space doesn't use it but API requires it for consistency)
@@ -1446,7 +1449,7 @@ def test_state_space_time_series():
         X=dummy_X_insample,
         out_of_sample=False,
     )
-    assert isinstance(predictions_in_sample, az.InferenceData)
+    assert isinstance(predictions_in_sample, xr.DataTree)
     assert "posterior_predictive" in predictions_in_sample
     assert "y_hat" in predictions_in_sample.posterior_predictive
     assert "mu" in predictions_in_sample.posterior_predictive
@@ -1464,22 +1467,17 @@ def test_state_space_time_series():
         X=future_X,
         out_of_sample=True,
     )
-    # Note: predict now returns InferenceData, not Dataset!
-    # But let's check what the test expects.
-    # The previous code expected xr.Dataset:
-    # assert isinstance(predictions_out_sample, xr.Dataset)
-    # I updated predict() to return az.InferenceData.
-    # So I should update this assertion too.
+    # Predictions are returned as a DataTree with a posterior_predictive group.
 
-    assert isinstance(predictions_out_sample, az.InferenceData)
-    assert "y_hat" in predictions_out_sample.posterior_predictive
-    assert "mu" in predictions_out_sample.posterior_predictive
-
-    # Verify forecast has correct dimensions
-    # y_hat is in posterior_predictive group
-    assert predictions_out_sample.posterior_predictive["y_hat"].shape[-1] == len(
-        future_dates
+    assert isinstance(predictions_out_sample, xr.DataTree)
+    posterior_predictive = predictions_out_sample["posterior_predictive"]
+    assert "y_hat" in posterior_predictive
+    assert "mu" in posterior_predictive
+    np.testing.assert_array_equal(
+        posterior_predictive["obs_ind"].values, future_X["obs_ind"].values
     )
+
+    assert posterior_predictive["y_hat"].sizes["obs_ind"] == len(future_dates)
 
     # --- Test Case 4: Model scoring --- #
     # Create dummy X for score (state-space doesn't use it but API requires it)

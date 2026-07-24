@@ -20,7 +20,6 @@ import warnings
 from abc import ABC, abstractmethod
 from typing import Any, Literal
 
-import arviz as az
 import numpy as np
 import xarray as xr
 from sklearn.base import RegressorMixin, clone
@@ -107,8 +106,8 @@ class ModelAdapter(ABC):
 
     @property
     @abstractmethod
-    def idata(self) -> az.InferenceData:
-        """Return InferenceData for Bayesian models."""
+    def idata(self) -> xr.DataTree:
+        """Return a DataTree for Bayesian models."""
 
     @abstractmethod
     def fit(
@@ -206,8 +205,8 @@ class PyMCModelAdapter(ModelAdapter):
         return "pymc"
 
     @property
-    def idata(self) -> az.InferenceData:
-        """Return the model's InferenceData object."""
+    def idata(self) -> xr.DataTree:
+        """Return the model's DataTree."""
         return self._model.idata
 
     def fit(
@@ -216,7 +215,7 @@ class PyMCModelAdapter(ModelAdapter):
         y: Any,
         *,
         coords: dict[str, Any] | None = None,
-    ) -> az.InferenceData:
+    ) -> xr.DataTree:
         """Fit the PyMC model.
 
         Parameters
@@ -309,8 +308,8 @@ class SklearnModelAdapter(ModelAdapter):
         return "sklearn"
 
     @property
-    def idata(self) -> az.InferenceData:
-        """OLS models do not expose InferenceData."""
+    def idata(self) -> xr.DataTree:
+        """OLS models do not expose a DataTree."""
         raise AttributeError("OLS models do not have idata.")
 
     def fit(
@@ -414,8 +413,8 @@ class PyMCForecastAdapter(ModelAdapter):
         return "pymc-forecast"
 
     @property
-    def idata(self) -> az.InferenceData:
-        """Return the model's InferenceData (posterior draws)."""
+    def idata(self) -> xr.DataTree:
+        """Return the model's DataTree (posterior draws)."""
         if self._model.idata is None:
             raise RuntimeError("Model has not been fit yet.")
         return self._model.idata
@@ -426,7 +425,7 @@ class PyMCForecastAdapter(ModelAdapter):
         y: Any,
         *,
         coords: dict[str, Any] | None = None,
-    ) -> az.InferenceData:
+    ) -> xr.DataTree:
         """Fit the forecasting model on the pre-period.
 
         Parameters

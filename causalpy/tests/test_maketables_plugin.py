@@ -13,7 +13,6 @@
 #   limitations under the License.
 """Tests for optional maketables plugin hooks on experiment objects."""
 
-import arviz as az
 import numpy as np
 import pandas as pd
 import pytest
@@ -520,8 +519,10 @@ def test_maketables_missing_pymc_coef_variable_raises(mock_pymc_sample):
         model=cp.pymc_models.LinearRegression(sample_kwargs=sample_kwargs),
     )
 
-    posterior = result.model.idata.posterior.rename({"beta": "beta_missing"})
-    result.model.idata = az.InferenceData(posterior=posterior)
+    posterior = (
+        result.model.idata["posterior"].to_dataset().rename({"beta": "beta_missing"})
+    )
+    result.model.idata = xr.DataTree.from_dict({"posterior": posterior})
 
     with pytest.raises(
         ValueError,
@@ -542,8 +543,10 @@ def test_maketables_incompatible_pymc_label_dim_raises(mock_pymc_sample):
         model=cp.pymc_models.LinearRegression(sample_kwargs=sample_kwargs),
     )
 
-    posterior = result.model.idata.posterior.rename({"coeffs": "bad_coeff_dim"})
-    result.model.idata = az.InferenceData(posterior=posterior)
+    posterior = (
+        result.model.idata["posterior"].to_dataset().rename({"coeffs": "bad_coeff_dim"})
+    )
+    result.model.idata = xr.DataTree.from_dict({"posterior": posterior})
 
     with pytest.raises(
         ValueError,

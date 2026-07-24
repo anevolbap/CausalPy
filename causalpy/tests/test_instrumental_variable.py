@@ -18,6 +18,7 @@ Tests for the InstrumentalVariable experiment class.
 import numpy as np
 import pandas as pd
 import pytest
+import xarray as xr
 
 import causalpy as cp
 from causalpy.custom_exceptions import DataException
@@ -479,7 +480,7 @@ def test_iv_get_plot_data_not_implemented(iv_data, sample_kwargs):
 
 
 def test_iv_sample_predictive_distribution(iv_data, sample_kwargs):
-    """Test that predictive distribution can be sampled."""
+    """PyMC PPC sampler mutates the fitted DataTree with posterior_predictive."""
     result = cp.InstrumentalVariable(
         instruments_data=iv_data["instruments_data"],
         data=iv_data["data"],
@@ -490,8 +491,68 @@ def test_iv_sample_predictive_distribution(iv_data, sample_kwargs):
         ),
     )
 
+    assert isinstance(result.idata, xr.DataTree)
+    assert "posterior_predictive" not in result.idata
+    posterior_before_ppc = result.idata["posterior"].to_dataset().copy()
+
     result.model.sample_predictive_distribution(ppc_sampler="pymc")
-    assert hasattr(result.idata, "posterior_predictive")
+
+    assert isinstance(result.idata, xr.DataTree)
+    assert "posterior_predictive" in result.idata
+    assert "prior_predictive" in result.idata
+    xr.testing.assert_identical(
+        result.idata["posterior"].to_dataset(), posterior_before_ppc
+    )
+
+
+def test_iv_default_jax_ppc_mutates_existing_datatree(
+    iv_data, sample_kwargs, monkeypatch
+):
+    """Default JAX PPC sampler mutates an existing DataTree in place.
+
+    JAX itself is optional in the test env; the DataTree mutation contract is
+    exercised by stubbing ``pm.sample_posterior_predictive`` while asserting the
+    default call uses ``compile_kwargs={"mode": "JAX"}`` and
+    ``extend_inferencedata=True``.
+    """
+    import pymc as pm
+
+    result = cp.InstrumentalVariable(
+        instruments_data=iv_data["instruments_data"],
+        data=iv_data["data"],
+        instruments_formula=iv_data["instruments_formula"],
+        formula=iv_data["formula"],
+        model=cp.pymc_models.InstrumentalVariableRegression(
+            sample_kwargs=sample_kwargs
+        ),
+    )
+
+    assert isinstance(result.idata, xr.DataTree)
+    assert "posterior_predictive" not in result.idata
+    original_idata = result.idata
+
+    def fake_sample_posterior_predictive(idata, *args, **kwargs):
+        assert kwargs.get("extend_inferencedata") is True
+        assert kwargs.get("compile_kwargs") == {"mode": "JAX"}
+        # Mimic in-place mutation from extend_inferencedata=True
+        idata["posterior_predictive"] = xr.Dataset(
+            {
+                "likelihood": (
+                    ("chain", "draw", "likelihood_dim_0"),
+                    np.zeros((1, 1, 1)),
+                )
+            }
+        )
+        return idata
+
+    monkeypatch.setattr(
+        pm, "sample_posterior_predictive", fake_sample_posterior_predictive
+    )
+    result.model.sample_predictive_distribution()  # default ppc_sampler="jax"
+
+    assert result.idata is original_idata
+    assert isinstance(result.idata, xr.DataTree)
+    assert "posterior_predictive" in result.idata
 
 
 # =============================================================================
