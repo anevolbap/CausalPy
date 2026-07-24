@@ -147,16 +147,14 @@ def _equal_tailed_interval(
     return lower, upper
 
 
-def _plot_interval_band(
+def _interval_bound_values(
     x: pd.DatetimeIndex | np.ndarray | pd.Index | pd.Series | ExtensionArray,
     Y: xr.DataArray,
-    ax: plt.Axes,
     *,
     ci_prob: float,
     ci_kind: Literal["hdi", "eti"],
-    plot_hdi_kwargs: dict[str, Any],
-) -> PolyCollection:
-    """Draw a posterior interval band without drawing a summary line."""
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return validated posterior interval bounds aligned one-to-one with ``x``."""
     if ci_kind == "hdi":
         lower, upper = hdi_bound_arrays(
             Y,
@@ -182,6 +180,29 @@ def _plot_interval_band(
             f"(x={n_x}, lower={lower_vals.size}, upper={upper_vals.size})."
         )
         raise ValueError(msg)
+    return lower_vals, upper_vals
+
+
+def _plot_interval_band(
+    x: pd.DatetimeIndex | np.ndarray | pd.Index | pd.Series | ExtensionArray,
+    Y: xr.DataArray,
+    ax: plt.Axes,
+    *,
+    ci_prob: float,
+    ci_kind: Literal["hdi", "eti"],
+    plot_hdi_kwargs: dict[str, Any],
+    interval_bounds: tuple[np.ndarray, np.ndarray] | None = None,
+) -> PolyCollection:
+    """Draw a validated posterior interval band without a summary line."""
+    if interval_bounds is None:
+        lower_vals, upper_vals = _interval_bound_values(
+            x,
+            Y,
+            ci_prob=ci_prob,
+            ci_kind=ci_kind,
+        )
+    else:
+        lower_vals, upper_vals = interval_bounds
 
     fill_kwargs = plot_hdi_kwargs.get("fill_kwargs", {})
     line_color = plot_hdi_kwargs.get("color", "C0")
@@ -217,6 +238,12 @@ def _plot_ribbon(
     line_kwargs = plot_hdi_kwargs.copy()
     line_kwargs.pop("fill_kwargs", None)
 
+    interval_bounds = _interval_bound_values(
+        x,
+        Y,
+        ci_prob=ci_prob,
+        ci_kind=ci_kind,
+    )
     (h_line,) = ax.plot(
         x,
         Y.mean(dim=["chain", "draw"]),
@@ -232,6 +259,7 @@ def _plot_ribbon(
         ci_prob=ci_prob,
         ci_kind=ci_kind,
         plot_hdi_kwargs=band_kwargs,
+        interval_bounds=interval_bounds,
     )
     return h_line, h_patch
 
