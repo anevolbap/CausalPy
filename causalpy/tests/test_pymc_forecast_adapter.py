@@ -14,6 +14,9 @@
 """Tests for the pymc-forecast model-provider adapter behind
 InterruptedTimeSeries (issue #1013)."""
 
+import sys
+from importlib.metadata import version
+
 import matplotlib
 
 matplotlib.use("Agg")
@@ -30,7 +33,7 @@ from causalpy.experiments.model_adapter import (
     PyMCForecastAdapter,
     make_model_adapter,
 )
-from causalpy.pymc_forecast_models import PyMCForecastModel
+from causalpy.pymc_forecast_models import PyMCForecastModel, _import_pymc_forecast
 
 pymc_forecast = pytest.importorskip("pymc_forecast")
 
@@ -444,6 +447,7 @@ def test_fit_idata_exposes_full_fit_result(forecast_result):
     posterior used for prediction."""
     model = forecast_result.model
     full = model.fit_idata
+    assert isinstance(full, xr.DataTree)
     assert hasattr(full, "sample_stats")
     assert full.posterior.sizes["draw"] == sample_kwargs["draws"]
     thinned = forecast_result.idata
@@ -493,3 +497,100 @@ class TestPlaceboInTime:
             assert isinstance(fold_model, PyMCForecastModel)
             assert fold_model is not base_model
             assert fold_model.idata is not None
+
+
+def test_pymc_forecast_02_prediction_schema_contract():
+    """The optional extra's pinned 0.2 schema matches adapter consumption."""
+    assert version("pymc-forecast").startswith("0.2.")
+    assert {
+        "OBS_VAR": pymc_forecast.OBS_VAR,
+        "MU_VAR": pymc_forecast.MU_VAR,
+        "FORECAST_VAR": pymc_forecast.FORECAST_VAR,
+        "MU_FORECAST_VAR": pymc_forecast.MU_FORECAST_VAR,
+        "TIME_DIM": pymc_forecast.TIME_DIM,
+        "FUTURE_DIM": pymc_forecast.FUTURE_DIM,
+    } == {
+        "OBS_VAR": "obs",
+        "MU_VAR": "mu",
+        "FORECAST_VAR": "forecast",
+        "MU_FORECAST_VAR": "mu_future",
+        "TIME_DIM": "time",
+        "FUTURE_DIM": "time_future",
+    }
+    assert callable(pymc_forecast.prediction_samples)
+
+
+def test_missing_forecast_extra_has_actionable_install_error(monkeypatch):
+    """The optional dependency boundary fails only at forecast-model creation."""
+    monkeypatch.setitem(sys.modules, "pymc_forecast", None)
+    with pytest.raises(ImportError, match=r"pip install causalpy\[forecast\]"):
+        _import_pymc_forecast()
+
+
+def test_default_forecaster_is_hmc(forecast_result):
+    """The default backend executes the documented HMC forecaster."""
+    assert isinstance(forecast_result.model.forecaster, pymc_forecast.HMCForecaster)
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    ("forecaster", "forecaster_kwargs"),
+    [
+        pytest.param(
+            pymc_forecast.Forecaster,
+            {"num_steps": 1_000, "progressbar": False},
+            id="advi",
+        ),
+        pytest.param(
+            pymc_forecast.PathfinderForecaster,
+            {
+                "pathfinder_kwargs": {
+                    "num_paths": 1,
+                    "num_draws": 50,
+                    "num_draws_per_path": 50,
+                    "num_elbo_draws": 5,
+                    "parallel": False,
+                },
+                "progressbar": False,
+            },
+            id="pathfinder",
+        ),
+    ],
+)
+def test_approximate_forecasters_fit_and_predict_datatrees(
+    its_data, forecaster, forecaster_kwargs
+):
+    """ADVI and Pathfinder fit, sample, predict, and forecast through the
+    adapter's DataTree protocol without making an accuracy claim."""
+    df, treatment_time = its_data
+    num_samples = 10
+    result = cp.InterruptedTimeSeries(
+        df,
+        treatment_time,
+        formula="y ~ 1 + t",
+        model=PyMCForecastModel(
+            linear_model,
+            forecaster=forecaster,
+            forecaster_kwargs=forecaster_kwargs,
+            num_samples=num_samples,
+            random_seed=42,
+        ),
+    )
+
+    model = result.model
+    assert isinstance(model.forecaster, forecaster)
+    assert model.forecaster.is_fitted
+    assert isinstance(model.idata, xr.DataTree)
+    assert model.idata.posterior.sizes["draw"] == num_samples
+    assert list(result.score.index) == ["unit_0_r2", "unit_0_r2_std"]
+    for pred, expected_index in (
+        (result.pre_pred, result.datapre.index),
+        (result.post_pred, result.datapost.index),
+    ):
+        assert isinstance(pred, xr.DataTree)
+        pp = pred.posterior_predictive
+        assert set(pp.data_vars) == {"mu", "y_hat"}
+        assert pp.mu.dims == ("chain", "draw", "obs_ind", "treated_units")
+        pd.testing.assert_index_equal(
+            pd.Index(pp.obs_ind.values), expected_index, check_names=False
+        )
