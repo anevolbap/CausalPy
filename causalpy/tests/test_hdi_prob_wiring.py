@@ -49,18 +49,17 @@ sample_kwargs = {"tune": 20, "draws": 20, "chains": 2, "cores": 2}
 
 # Each entry maps a "spy target" (dotted import path of the callable used by
 # the experiment's plot path) to the kwarg name that ``hdi_prob`` flows into.
-# ``plot_posterior_over_x`` targets use ``"ci_prob"`` (the canonical name); other callables
-# such as ``az.plot_posterior`` and ``az.plot_forest`` use ``"hdi_prob"``.
+# ``plot_posterior_over_x`` and local plotting helpers receive ``"ci_prob"``;
+# coefficient HDI helpers receive their explicit ``"prob"`` argument.
 _SpyTarget = tuple[str, str]
 
 
 def _resolve_dotted(dotted: str) -> Any:
-    """Resolve a dotted path that may include attribute access through an alias.
+    """Resolve a dotted import path through a module attribute.
 
-    For example, ``causalpy.experiments.prepostnegd.az.plot_posterior`` is not
-    importable as a module path because ``az`` is an alias inside the module,
-    not a real submodule. We import the longest valid module prefix and then
-    walk the remaining attributes.
+    The local plotting helpers are imported into their experiment modules, so
+    test spies target that stable call-site attribute rather than a private
+    implementation module.
     """
     parts = dotted.split(".")
     for i in range(len(parts), 0, -1):
@@ -423,7 +422,7 @@ def test_rkink_plot_default_ci_prob(mock_pymc_sample, fitted_rkink):
 @pytest.mark.integration
 @pytest.mark.parametrize("ci_prob", _PARAMS)
 def test_prepost_plot_threads_ci_prob(mock_pymc_sample, fitted_prepost, ci_prob):
-    """PrePostNEGD ``plot(ci_prob=...)`` reaches ``plot_posterior_over_x`` and ``az.plot_posterior``."""
+    """PrePostNEGD ``plot(ci_prob=...)`` reaches both local posterior helpers."""
     _check_threading(fitted_prepost, _PREPOST_TARGETS, ci_prob)
 
 
@@ -449,17 +448,13 @@ def test_piecewise_plot_default_ci_prob(mock_pymc_sample, fitted_piecewise):
 @pytest.mark.integration
 @pytest.mark.parametrize("ci_prob", _PARAMS)
 def test_panel_plot_threads_ci_prob(mock_pymc_sample, fitted_panel, ci_prob):
-    """PanelRegression ``plot(hdi_prob=...)`` reaches ``az.plot_forest``.
-
-    PanelRegression has not yet been migrated to ``ci_prob`` (it does not
-    support ETI/spaghetti/histogram), so we call ``plot(hdi_prob=...)`` here.
-    """
+    """PanelRegression ``plot(hdi_prob=...)`` reaches its local HDI helper."""
     _check_threading(fitted_panel, _PANEL_TARGETS, ci_prob, plot_kwarg="hdi_prob")
 
 
 @pytest.mark.integration
 def test_panel_plot_default_ci_prob(mock_pymc_sample, fitted_panel):
-    """PanelRegression default ``plot()`` forwards ``HDI_PROB`` to ``az.plot_forest``."""
+    """PanelRegression default ``plot()`` forwards ``HDI_PROB`` to its HDI helper."""
     _check_default(fitted_panel, _PANEL_TARGETS)
 
 
