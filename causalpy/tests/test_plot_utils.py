@@ -21,8 +21,15 @@ import pandas as pd
 import pytest
 import xarray as xr
 from matplotlib.collections import PolyCollection
+from matplotlib.colors import to_rgba
 
-from causalpy.plot_utils import get_hdi_to_df, plot_posterior_over_x
+from causalpy._arviz_compat import hdi_bound_arrays, hdi_bounds
+from causalpy.plot_utils import (
+    get_hdi_to_df,
+    plot_posterior_over_x,
+    plot_scalar_posterior,
+)
+from causalpy.utils import round_num
 
 
 @pytest.mark.integration
@@ -674,4 +681,138 @@ def test_plot_posterior_over_x_warns_num_samples_ignored_for_non_spaghetti(
     fig, ax = plt.subplots()
     with pytest.warns(UserWarning, match="num_samples.*ignored"):
         plot_posterior_over_x(x, Y, ax=ax, kind="ribbon", num_samples=100)
+    plt.close(fig)
+
+
+@pytest.mark.integration
+def test_plot_posterior_over_x_hdi_band_matches_explicit_bounds(
+    synthetic_posterior_data,
+):
+    """The HDI ribbon contains the explicit compatibility bounds at every x value."""
+    x, Y = synthetic_posterior_data
+    fig, ax = plt.subplots()
+
+    _, patch = plot_posterior_over_x(x, Y, ax=ax, ci_prob=0.89)
+
+    lower, upper = hdi_bound_arrays(Y, prob=0.89, dim=["chain", "draw"])
+    vertices = patch.get_paths()[0].vertices[:, 1]
+    for bound in np.concatenate([lower, upper]):
+        assert np.isclose(vertices, bound).any()
+    plt.close(fig)
+
+
+@pytest.mark.integration
+def test_plot_posterior_over_x_hdi_band_honors_fill_kwargs(synthetic_posterior_data):
+    """The local HDI ribbon preserves color and alpha styling."""
+    x, Y = synthetic_posterior_data
+    fig, ax = plt.subplots()
+
+    _, patch = plot_posterior_over_x(
+        x,
+        Y,
+        ax=ax,
+        plot_hdi_kwargs={
+            "color": "C2",
+            "fill_kwargs": {"color": "C2", "alpha": 0.4},
+        },
+    )
+
+    assert patch.get_alpha() == pytest.approx(0.4)
+    np.testing.assert_allclose(patch.get_facecolor()[0], to_rgba("C2", alpha=0.4))
+    plt.close(fig)
+
+
+@pytest.mark.integration
+def test_plot_posterior_over_x_hdi_band_handles_singleton_and_empty_x():
+    """Local HDI bands retain valid artists for singleton and empty x dimensions."""
+    singleton_x = pd.DatetimeIndex(["2020-01-01"])
+    singleton = xr.DataArray(
+        np.arange(6, dtype=float).reshape(2, 3, 1),
+        dims=["chain", "draw", "obs_ind"],
+    )
+    empty_x = pd.DatetimeIndex([])
+    empty = xr.DataArray(
+        np.empty((2, 3, 0)),
+        dims=["chain", "draw", "obs_ind"],
+    )
+
+    fig, axes = plt.subplots(1, 2)
+    singleton_line, singleton_patch = plot_posterior_over_x(
+        singleton_x,
+        singleton,
+        ax=axes[0],
+    )
+    _, empty_patch = plot_posterior_over_x(empty_x, empty, ax=axes[1])
+
+    assert len(singleton_line.get_xdata()) == 1
+    assert isinstance(singleton_patch, PolyCollection)
+    assert isinstance(empty_patch, PolyCollection)
+    plt.close(fig)
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("ci_prob", [0.5, 0.94])
+def test_plot_scalar_posterior_uses_finite_draws_for_hdi_and_annotation(ci_prob):
+    """Scalar posterior density ignores partial NaN/Inf draws for every statistic."""
+    values = np.array(
+        [
+            [1.0, np.nan, 2.0, np.inf],
+            [3.0, -np.inf, 4.0, 5.0],
+        ]
+    )
+    draws = xr.DataArray(
+        values[:, :, None],
+        dims=["chain", "draw", "treated_units"],
+    )
+    finite_draws = values[np.isfinite(values)]
+    expected_lower, expected_upper = hdi_bounds(finite_draws, prob=ci_prob)
+    expected_mean = float(finite_draws.mean())
+    fig, ax = plt.subplots()
+
+    returned_ax = plot_scalar_posterior(
+        draws,
+        ax=ax,
+        ci_prob=ci_prob,
+        round_to=4,
+    )
+
+    hdi_line = next(
+        line for line in ax.lines if line.get_label() == f"{ci_prob:.0%} HDI"
+    )
+    np.testing.assert_allclose(
+        hdi_line.get_xdata(),
+        [expected_lower, expected_upper],
+    )
+    assert returned_ax is ax
+    assert any(
+        line.get_label() == "Reference value" and np.allclose(line.get_xdata(), [0, 0])
+        for line in ax.lines
+    )
+    annotation = ax.texts[0].get_text()
+    assert round_num(expected_mean, 4) in annotation
+    assert f"{ci_prob:.0%} HDI" in annotation
+    assert "nan" not in annotation.lower()
+    assert "inf" not in annotation.lower()
+    plt.close(fig)
+
+
+@pytest.mark.integration
+def test_plot_scalar_posterior_rejects_nonscalar_and_nonfinite_draws():
+    """Scalar density fails clearly before it can render invalid posterior inputs."""
+    nonscalar = xr.DataArray(
+        np.ones((2, 3, 2)),
+        dims=["chain", "draw", "coeffs"],
+    )
+    nonfinite = xr.DataArray(
+        np.full((2, 3), np.nan),
+        dims=["chain", "draw"],
+    )
+    fig, axes = plt.subplots(1, 2)
+
+    with pytest.raises(ValueError, match="only chain and draw"):
+        plot_scalar_posterior(nonscalar, ax=axes[0])
+    with pytest.raises(ValueError, match="at least one finite"):
+        plot_scalar_posterior(nonfinite, ax=axes[1])
+    assert not axes[0].patches
+    assert not axes[1].patches
     plt.close(fig)
