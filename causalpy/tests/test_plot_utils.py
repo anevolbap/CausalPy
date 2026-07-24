@@ -457,6 +457,10 @@ def test_plot_posterior_over_x_default_behavior(synthetic_posterior_data):
     # Check return types
     assert isinstance(h_line, plt.Line2D), "Should return Line2D for mean line"
     assert h_patch is not None, "Should return PolyCollection for HDI ribbon"
+    np.testing.assert_allclose(
+        h_patch.get_facecolor()[0],
+        to_rgba(h_line.get_color(), alpha=0.3),
+    )
 
     plt.close(fig)
 
@@ -744,9 +748,16 @@ def test_plot_posterior_over_x_hdi_band_handles_singleton_and_empty_x():
     )
     _, empty_patch = plot_posterior_over_x(empty_x, empty, ax=axes[1])
 
-    assert len(singleton_line.get_xdata()) == 1
-    assert isinstance(singleton_patch, PolyCollection)
+    lower, upper = hdi_bound_arrays(
+        singleton,
+        prob=0.94,
+        dim=["chain", "draw"],
+    )
+    singleton_vertices = singleton_patch.get_paths()[0].vertices[:, 1]
+    for bound in np.concatenate([lower, upper]):
+        assert np.isclose(singleton_vertices, bound).any()
     assert isinstance(empty_patch, PolyCollection)
+    assert sum(len(path.vertices) for path in empty_patch.get_paths()) == 0
     plt.close(fig)
 
 
@@ -815,4 +826,66 @@ def test_plot_scalar_posterior_rejects_nonscalar_and_nonfinite_draws():
         plot_scalar_posterior(nonfinite, ax=axes[1])
     assert not axes[0].patches
     assert not axes[1].patches
+    plt.close(fig)
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("ci_kind", ["hdi", "eti"])
+def test_plot_posterior_over_x_ribbon_rejects_x_length_mismatch(ci_kind):
+    """Both interval kinds reject bounds that cannot align one-to-one with x."""
+    x = np.arange(3)
+    draws = xr.DataArray(
+        np.arange(12, dtype=float).reshape(2, 3, 2),
+        dims=["chain", "draw", "obs_ind"],
+    )
+    fig, ax = plt.subplots()
+
+    with pytest.raises(ValueError, match="length mismatch"):
+        plot_posterior_over_x(x, draws, ax=ax, ci_kind=ci_kind)
+    plt.close(fig)
+
+
+@pytest.mark.integration
+def test_plot_posterior_over_x_eti_rejects_multiple_preserved_dimensions():
+    """ETI ribbons reject extra dimensions instead of flattening them into x."""
+    x = np.arange(4)
+    draws = xr.DataArray(
+        np.arange(24, dtype=float).reshape(2, 3, 2, 2),
+        dims=["chain", "draw", "obs_ind", "extra"],
+    )
+    fig, ax = plt.subplots()
+
+    with pytest.raises(ValueError, match="exactly one preserved dimension"):
+        plot_posterior_over_x(x, draws, ax=ax, ci_kind="eti")
+    plt.close(fig)
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("shape", [(1, 4), (4, 1)])
+def test_plot_scalar_posterior_preserves_singleton_sample_dimensions(shape):
+    """A single chain or draw remains a valid scalar posterior."""
+    values = np.arange(np.prod(shape), dtype=float).reshape(shape)
+    draws = xr.DataArray(values, dims=["chain", "draw"])
+    expected_lower, expected_upper = hdi_bounds(values.ravel(), prob=0.94)
+    fig, ax = plt.subplots()
+
+    plot_scalar_posterior(draws, ax=ax)
+
+    hdi_line = next(line for line in ax.lines if line.get_label() == "94% HDI")
+    np.testing.assert_allclose(hdi_line.get_xdata(), [expected_lower, expected_upper])
+    plt.close(fig)
+
+
+@pytest.mark.integration
+def test_plot_scalar_posterior_omits_reference_line_when_requested():
+    """An explicit None reference value suppresses the vertical reference artist."""
+    draws = xr.DataArray(
+        np.arange(6, dtype=float).reshape(2, 3),
+        dims=["chain", "draw"],
+    )
+    fig, ax = plt.subplots()
+
+    plot_scalar_posterior(draws, ax=ax, ref_val=None)
+
+    assert all(line.get_label() != "Reference value" for line in ax.lines)
     plt.close(fig)

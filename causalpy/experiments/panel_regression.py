@@ -525,9 +525,9 @@ class PanelRegression(BaseExperiment):
         ----------
         hdi_prob : float
             Probability mass of the highest density interval drawn around
-            each posterior coefficient via :func:`arviz.plot_forest`. Must
-            be in ``(0, 1]``. Ignored for OLS models. Defaults to
-            :data:`~causalpy.constants.HDI_PROB` (currently 0.94).
+            each posterior coefficient. Must be in ``(0, 1]``. Ignored for
+            OLS models. Defaults to :data:`~causalpy.constants.HDI_PROB`
+            (currently 0.94).
         show : bool
             Whether to automatically display the plot. Defaults to ``True``.
         legend_kwargs : dict, optional
@@ -559,9 +559,8 @@ class PanelRegression(BaseExperiment):
         ----------
         hdi_prob : float, optional
             Probability mass of the highest density interval drawn around each
-            posterior coefficient via :func:`arviz.plot_forest`. Must be in
-            ``(0, 1]``. Defaults to :data:`~causalpy.constants.HDI_PROB`
-            (currently 0.94).
+            posterior coefficient. Must be in ``(0, 1]``. Defaults to
+            :data:`~causalpy.constants.HDI_PROB` (currently 0.94).
 
         Returns
         -------
@@ -987,6 +986,7 @@ class PanelRegression(BaseExperiment):
                     sorted_time_vals,
                     unit_mu.mean(dim=["chain", "draw"]).values,
                     "s--",
+                    color="C1",
                     label="Fitted",
                     alpha=0.7,
                 )
@@ -997,7 +997,10 @@ class PanelRegression(BaseExperiment):
                     ax,
                     ci_prob=hdi_prob,
                     ci_kind="hdi",
-                    plot_hdi_kwargs={"fill_kwargs": {"alpha": 0.2}},
+                    plot_hdi_kwargs={
+                        "color": "C1",
+                        "fill_kwargs": {"alpha": 0.2},
+                    },
                 )
             else:
                 # OLS: get fitted values for this unit

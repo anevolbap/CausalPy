@@ -20,6 +20,7 @@ import numpy as np
 import pandas as pd
 import pytest
 from matplotlib.collections import PolyCollection
+from matplotlib.colors import to_rgba
 from sklearn.linear_model import LinearRegression
 
 import causalpy as cp
@@ -893,6 +894,13 @@ def test_panel_bayesian_coefficient_forest_preserves_axes_and_hdi_bounds(
             np.sort(segment[:, 0]),
             [expected_lower, expected_upper],
         )
+    marker_line = next(line for line in ax.lines if line.get_marker() == "o")
+    np.testing.assert_allclose(
+        marker_line.get_xdata(),
+        coefficients.mean(dim=["chain", "draw"]).values,
+    )
+    np.testing.assert_allclose(marker_line.get_ydata(), np.arange(len(coeff_names)))
+
     plt.close(fig)
 
 
@@ -913,10 +921,12 @@ def test_panel_plot_coefficients_rejects_empty_selection(small_panel_data):
 
 @pytest.mark.integration
 @pytest.mark.parametrize("hdi_prob", [0.5, 0.94])
+@pytest.mark.parametrize("interval_type", ["mean", "predictive"])
 def test_panel_trajectory_hdi_band_preserves_fitted_line_and_legend(
     mock_pymc_sample,
     small_panel_data,
     hdi_prob,
+    interval_type,
 ):
     """Trajectory bands use the selected interval without duplicating Fitted."""
     result = cp.PanelRegression(
@@ -928,7 +938,11 @@ def test_panel_trajectory_hdi_band_preserves_fitted_line_and_legend(
         model=cp.pymc_models.LinearRegression(sample_kwargs=sample_kwargs),
     )
 
-    fig, axes = result.plot_trajectories(units=["unit_0"], hdi_prob=hdi_prob)
+    fig, axes = result.plot_trajectories(
+        units=["unit_0"],
+        hdi_prob=hdi_prob,
+        interval_type=interval_type,
+    )
 
     assert isinstance(axes, np.ndarray)
     ax = axes[0]
@@ -948,8 +962,15 @@ def test_panel_trajectory_hdi_band_preserves_fitted_line_and_legend(
         fitted_lines[0].get_ydata(),
         unit_mu.mean(dim=["chain", "draw"]).values,
     )
+    interval_source = (
+        unit_mu
+        if interval_type == "mean"
+        else result.model.idata.posterior_predictive["y_hat"]
+        .isel(obs_ind=sorted_indices.tolist())
+        .squeeze("treated_units", drop=True)
+    )
     lower, upper = hdi_bound_arrays(
-        unit_mu,
+        interval_source,
         prob=hdi_prob,
         dim=["chain", "draw"],
     )
@@ -961,6 +982,10 @@ def test_panel_trajectory_hdi_band_preserves_fitted_line_and_legend(
     vertices = band.get_paths()[0].vertices[:, 1]
     for bound in np.concatenate([lower, upper]):
         assert np.isclose(vertices, bound).any()
+    np.testing.assert_allclose(
+        band.get_facecolor()[0],
+        to_rgba(fitted_lines[0].get_color(), alpha=0.2),
+    )
     plt.close(fig)
 
 

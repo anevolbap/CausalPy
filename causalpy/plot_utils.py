@@ -70,8 +70,8 @@ def plot_posterior_over_x(
     ax : plt.Axes
         Matplotlib axes object.
     plot_hdi_kwargs : dict, optional
-        Keyword arguments for line, band, heatmap, or sample styling (passed through
-        to matplotlib / ArviZ helpers depending on ``kind`` and ``ci_kind``).
+        Keyword arguments for local Matplotlib line, band, heatmap, or sample
+        styling. Ribbon bands accept nested ``fill_kwargs``.
     ci_prob : float, optional
         Credible interval width when ``kind="ribbon"``. Defaults to
         :data:`~causalpy.constants.HDI_PROB` (currently 0.94). Ignored for
@@ -165,6 +165,13 @@ def _plot_interval_band(
         )
     else:
         lower, upper = _equal_tailed_interval(Y, ci_prob)
+        preserved_dims = list(lower.dims)
+        if len(preserved_dims) != 1:
+            msg = (
+                "Vector ETI bounds require exactly one preserved dimension; "
+                f"got {preserved_dims!r}"
+            )
+            raise ValueError(msg)
 
     lower_vals = np.asarray(lower, dtype=float).ravel()
     upper_vals = np.asarray(upper, dtype=float).ravel()
@@ -210,13 +217,6 @@ def _plot_ribbon(
     line_kwargs = plot_hdi_kwargs.copy()
     line_kwargs.pop("fill_kwargs", None)
 
-    (h_line,) = ax.plot(
-        x,
-        Y.mean(dim=["chain", "draw"]),
-        ls="-",
-        **line_kwargs,
-        label=label,
-    )
     h_patch = _plot_interval_band(
         x,
         Y,
@@ -224,6 +224,13 @@ def _plot_ribbon(
         ci_prob=ci_prob,
         ci_kind=ci_kind,
         plot_hdi_kwargs=plot_hdi_kwargs,
+    )
+    (h_line,) = ax.plot(
+        x,
+        Y.mean(dim=["chain", "draw"]),
+        ls="-",
+        **line_kwargs,
+        label=label,
     )
     return h_line, h_patch
 
@@ -262,16 +269,21 @@ def plot_scalar_posterior(
     ValueError
         If the posterior is non-scalar after squeezing or has no finite draws.
     """
-    posterior = draws.squeeze(drop=True)
+    if {"chain", "draw"} - set(draws.dims):
+        msg = "Scalar posterior plotting requires both chain and draw dimensions."
+        raise ValueError(msg)
+    squeeze_dims = [
+        dim
+        for dim in draws.dims
+        if dim not in {"chain", "draw"} and draws.sizes[dim] == 1
+    ]
+    posterior = draws.squeeze(dim=squeeze_dims, drop=True) if squeeze_dims else draws
     non_sample_dims = [dim for dim in posterior.dims if dim not in {"chain", "draw"}]
     if non_sample_dims:
         msg = (
             "Scalar posterior plotting requires only chain and draw dimensions after "
             f"squeezing singleton dimensions; got {non_sample_dims!r}."
         )
-        raise ValueError(msg)
-    if {"chain", "draw"} - set(posterior.dims):
-        msg = "Scalar posterior plotting requires both chain and draw dimensions."
         raise ValueError(msg)
 
     flat = np.asarray(
