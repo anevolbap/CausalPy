@@ -295,8 +295,8 @@ def test_covariate_free_future_index_path(its_data):
         formula="y ~ 0",
         model=PyMCForecastModel(
             LocalLevel(),
-            forecaster_kwargs=dict(sample_kwargs),
-            num_samples=200,
+            forecaster_kwargs=dict(fast_sample_kwargs),
+            num_samples=50,
             random_seed=42,
         ),
     )
@@ -405,16 +405,17 @@ def test_print_coefficients_skips_non_scalar_parameters(capsys):
     model = make_forecast_model()
     posterior = xr.Dataset(
         {
-            "sigma": (("chain", "draw"), np.ones((1, 2))),
+            "sigma": (("chain", "draw"), np.full((1, 2), 1.23456)),
             "latent": (("chain", "draw", "time"), np.ones((1, 2, 3))),
         }
     )
     model.idata = xr.DataTree.from_dict({"posterior": posterior})
 
-    model.print_coefficients([])
+    model.print_coefficients([], round_to=3)
 
     output = capsys.readouterr().out
     assert "sigma" in output
+    assert "1.23" in output
     assert "latent" not in output
 
 
@@ -657,6 +658,13 @@ def test_missing_forecast_extra_has_actionable_install_error(monkeypatch):
 def test_default_forecaster_is_hmc(forecast_result):
     """The default backend executes the documented HMC forecaster."""
     assert isinstance(forecast_result.model.forecaster, pymc_forecast.HMCForecaster)
+
+
+def test_default_forecaster_configuration_is_empty():
+    """An omitted forecaster configuration constructs a usable HMC backend."""
+    model = PyMCForecastModel(linear_model)
+    assert isinstance(model.forecaster, pymc_forecast.HMCForecaster)
+    assert model.forecaster_kwargs == {}
 
 
 @pytest.mark.integration
