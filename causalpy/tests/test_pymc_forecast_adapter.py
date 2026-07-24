@@ -202,6 +202,16 @@ class TestRoundTripAgainstPyMCBackend:
         plot_df = forecast_result.get_plot_data_bayesian()
         assert {"prediction", "impact"}.issubset(plot_df.columns)
 
+    def test_summaries_and_plot_data_without_plotting(self, forecast_result, capsys):
+        """Forecast summary and plot-data contracts remain observable when
+        generic plotting is unavailable."""
+        forecast_result.summary()
+        assert "Model parameters:" in capsys.readouterr().out
+        summary = forecast_result.effect_summary()
+        assert len(summary.text) > 0
+        plot_df = forecast_result.get_plot_data_bayesian()
+        assert {"prediction", "impact"}.issubset(plot_df.columns)
+
     def test_experiment_reports_bayesian_backend(self, forecast_result):
         assert forecast_result._model_backend.is_bayesian
         assert forecast_result._model_backend.kind == "pymc-forecast"
@@ -373,6 +383,24 @@ def test_statespace_models_rejected():
         PyMCForecastModel(linear_model, forecaster=pymc_forecast.StatespaceForecaster)
 
 
+def test_statespace_model_instances_rejected():
+    """The StatespaceModel branch cannot silently use noisy predictions."""
+
+    class UnsupportedStatespaceModel(pymc_forecast.StatespaceModel):
+        def statespace(self, data, covariates):
+            raise AssertionError(
+                "The rejection guard must run before model construction."
+            )
+
+        def priors(self, ss_mod, data, covariates):
+            raise AssertionError(
+                "The rejection guard must run before model construction."
+            )
+
+    with pytest.raises(NotImplementedError, match="pymc-forecast/issues/50"):
+        PyMCForecastModel(UnsupportedStatespaceModel())
+
+
 def test_clone_returns_unfitted_copy_with_same_config():
     """clone_model dispatches to _clone; the copy is unfitted but identically
     configured, so sensitivity checks can refit the same model spec."""
@@ -498,6 +526,28 @@ class TestPlaceboInTime:
             assert fold_model is not base_model
             assert fold_model.idata is not None
 
+    def test_placebo_context_factory_clones_forecast_model(
+        self, its_data, forecast_result
+    ):
+        """The PipelineContext factory path preserves the forecast backend."""
+        df, treatment_time = its_data
+        context = cp.PipelineContext(data=df)
+        context.experiment = forecast_result
+        context.experiment_config = {
+            "method": cp.InterruptedTimeSeries,
+            "treatment_time": treatment_time,
+            "formula": "y ~ 1 + t",
+            "model": make_forecast_model(),
+        }
+
+        result = cp.checks.PlaceboInTime(n_folds=1, random_seed=42).run(
+            forecast_result, context
+        )
+        assert len(result.metadata["fold_results"]) == 1
+        assert isinstance(
+            result.metadata["fold_results"][0].experiment.model, PyMCForecastModel
+        )
+
 
 def test_pymc_forecast_02_prediction_schema_contract():
     """The optional extra's pinned 0.2 schema matches adapter consumption."""
@@ -523,8 +573,9 @@ def test_pymc_forecast_02_prediction_schema_contract():
 def test_missing_forecast_extra_has_actionable_install_error(monkeypatch):
     """The optional dependency boundary fails only at forecast-model creation."""
     monkeypatch.setitem(sys.modules, "pymc_forecast", None)
-    with pytest.raises(ImportError, match=r"pip install causalpy\[forecast\]"):
+    with pytest.raises(ImportError, match=r"pip install causalpy\[forecast\]") as error:
         _import_pymc_forecast()
+    assert "pymc-forecast[extras]>=0.2,<0.3" in str(error.value)
 
 
 def test_default_forecaster_is_hmc(forecast_result):
