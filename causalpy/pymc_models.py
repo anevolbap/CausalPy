@@ -15,7 +15,7 @@
 
 import inspect
 import warnings
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import arviz as az
 import numpy as np
@@ -338,17 +338,22 @@ class PyMCModel(pm.Model):
             )
 
     def fit(
-        self, X: xr.DataArray, y: xr.DataArray, coords: dict[str, Any] | None = None
+        self,
+        X: xr.DataArray | dict[str, xr.DataArray],
+        y: xr.DataArray | dict[str, xr.DataArray],
+        coords: dict[str, Any] | None = None,
     ) -> xr.DataTree:
         """Draw samples from posterior, prior predictive, and posterior
         predictive distributions.
 
         Parameters
         ----------
-        X : xr.DataArray
-            Input features as an xarray DataArray.
-        y : xr.DataArray
-            Target variable as an xarray DataArray.
+        X : xarray.DataArray or dict of str to xarray.DataArray
+            Input features. Specialized models may consume a dictionary of
+            labeled input arrays.
+        y : xarray.DataArray or dict of str to xarray.DataArray
+            Target values. Specialized models may consume a dictionary of
+            labeled target arrays.
         coords : dict, optional
             Dictionary with coordinate names for named dimensions.
             Defaults to None.
@@ -360,9 +365,28 @@ class PyMCModel(pm.Model):
         """
 
         coords = {} if coords is None else coords.copy()
-        for data in (X, y):
-            for dimension in data.dims:
-                coords.setdefault(dimension, data.get_index(dimension))
+        if isinstance(X, xr.DataArray) and isinstance(y, xr.DataArray):
+            for data in (X, y):
+                for dimension in data.dims:
+                    coords.setdefault(dimension, data.get_index(dimension))
+            self._n_treated_units = y.sizes.get("treated_units", 1)
+        elif (
+            isinstance(X, dict)
+            and isinstance(y, dict)
+            and X
+            and y
+            and all(
+                isinstance(key, str) and isinstance(value, xr.DataArray)
+                for data in (X, y)
+                for key, value in data.items()
+            )
+        ):
+            self._n_treated_units = 1
+        else:
+            raise TypeError(
+                "X and y must both be xarray.DataArray objects or non-empty "
+                "dictionaries mapping strings to xarray.DataArray objects"
+            )
 
         # Ensure random_seed is used in sample_prior_predictive() and
         # sample_posterior_predictive() if provided in sample_kwargs.
@@ -372,8 +396,7 @@ class PyMCModel(pm.Model):
         # Data-driven priors are computed first, then user-specified priors override them
         self.priors = {**self.priors_from_data(X, y), **self.priors}
 
-        self._n_treated_units = y.sizes.get("treated_units", 1)
-        self.build_model(X, y, coords)
+        self.build_model(cast(xr.DataArray, X), cast(xr.DataArray, y), coords)
         with self:
             self.idata = pm.sample(**self.sample_kwargs)
             if self.idata is None:

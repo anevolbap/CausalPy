@@ -20,6 +20,7 @@ import xarray as xr
 from pymc_extras.prior import Prior
 
 import causalpy as cp
+from causalpy.experiments.model_adapter import PyMCModelAdapter
 from causalpy.pymc_models import (
     LinearRegression,
     PyMCModel,
@@ -110,7 +111,36 @@ class TestPyMCModel:
         with pytest.raises(
             NotImplementedError, match="This method must be implemented by a subclass"
         ):
-            PyMCModel().fit(X=np.ones(2), y=np.ones(3), coords={"a": 1})
+            X = xr.DataArray(
+                np.ones((2, 1)),
+                dims=["obs_ind", "coeffs"],
+                coords={"obs_ind": [0, 1], "coeffs": ["x"]},
+            )
+            y = xr.DataArray(
+                np.ones((2, 1)),
+                dims=["obs_ind", "treated_units"],
+                coords={"obs_ind": [0, 1], "treated_units": ["unit_0"]},
+            )
+            PyMCModel().fit(X=X, y=y, coords={"a": 1})
+
+    @pytest.mark.parametrize(
+        ("X", "y"),
+        [
+            (
+                {"unit": xr.DataArray([1.0], dims=["obs_ind"])},
+                xr.DataArray([1.0], dims=["obs_ind"]),
+            ),
+            (
+                {"unit": np.array([1.0])},
+                {"unit": xr.DataArray([1.0], dims=["obs_ind"])},
+            ),
+        ],
+        ids=["mixed-direct-and-mapping", "mapping-with-non-dataarray-value"],
+    )
+    def test_fit_rejects_mixed_or_malformed_input_shapes(self, X, y) -> None:
+        """Fit rejects non-DataArray pairs before model construction."""
+        with pytest.raises(TypeError, match="both be xarray.DataArray"):
+            MyToyModel().fit(X=X, y=y)
 
     @pytest.mark.parametrize(
         argnames="coords",
@@ -967,18 +997,26 @@ class TestSyntheticDifferenceInDifferencesWeightFitter:
         }
         return X, y, coords
 
-    def test_fitting(self, sdid_data):
-        """Test that the model fits and produces omega and lam posteriors."""
+    def test_fitting_through_adapter_preserves_coordinate_labels(self, sdid_data):
+        """Fitting through the adapter preserves the specialized mapping labels."""
         X, y, coords = sdid_data
-        model = SyntheticDifferenceInDifferencesWeightFitter(
-            sample_kwargs=sample_kwargs
+        adapter = PyMCModelAdapter(
+            SyntheticDifferenceInDifferencesWeightFitter(sample_kwargs=sample_kwargs)
         )
-        result = model.fit(X, y, coords=coords)
+        result = adapter.fit(X, y, coords=coords)
 
         assert isinstance(result, xr.DataTree)
         assert "posterior" in result
         assert "omega" in result.posterior
         assert "lam" in result.posterior
+        np.testing.assert_array_equal(
+            result.posterior["omega"].coords["coeffs"].values,
+            coords["coeffs"],
+        )
+        np.testing.assert_array_equal(
+            result.posterior["lam"].coords["obs_ind"].values,
+            coords["obs_ind"],
+        )
 
     def test_omega_is_simplex(self, sdid_data):
         """Test that omega weights sum to 1."""
