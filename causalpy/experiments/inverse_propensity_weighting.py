@@ -20,6 +20,7 @@ import arviz as az
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import xarray as xr
 from matplotlib.lines import Line2D
 from patsy import PatsyError
 from sklearn.linear_model import LinearRegression as sk_lin_reg
@@ -462,7 +463,7 @@ class InversePropensityWeighting(BaseExperiment):
         return ate, trt, ntrt
 
     def get_ate(
-        self, i: int, idata: az.InferenceData, method: str = "doubly_robust"
+        self, i: int, idata: xr.DataTree, method: str = "doubly_robust"
     ) -> list[float | np.floating]:
         """Compute the Average Treatment Effect for a single posterior sample.
 
@@ -473,8 +474,8 @@ class InversePropensityWeighting(BaseExperiment):
         ----------
         i : int
             Index of the posterior sample to process.
-        idata : az.InferenceData
-            ArviZ InferenceData object containing the posterior samples.
+        idata : xr.DataTree
+            DataTree containing the posterior samples.
         method : str, optional
             Weighting scheme to use. One of 'robust', 'raw', 'overlap',
             or 'doubly_robust'. Defaults to 'doubly_robust'.
@@ -541,7 +542,7 @@ class InversePropensityWeighting(BaseExperiment):
 
     def plot_ate(
         self,
-        idata: az.InferenceData | None = None,
+        idata: xr.DataTree | None = None,
         method: str | None = None,
         prop_draws: int = 100,
         ate_draws: int = 300,
@@ -563,8 +564,8 @@ class InversePropensityWeighting(BaseExperiment):
 
         Parameters
         ----------
-        idata : az.InferenceData | None, optional
-            ArviZ InferenceData with posterior propensity score samples.
+        idata : xr.DataTree | None, optional
+            DataTree with posterior propensity score samples.
             If ``None``, uses ``self.model.idata``.
         method : str | None, optional
             Weighting scheme to apply.  One of ``'robust'``, ``'raw'``,
@@ -751,7 +752,7 @@ class InversePropensityWeighting(BaseExperiment):
     def plot_balance_ecdf(
         self,
         covariate: str,
-        idata: az.InferenceData | None = None,
+        idata: xr.DataTree | None = None,
         weighting_scheme: str | None = None,
     ) -> tuple[plt.Figure, list[plt.Axes]]:
         """Plot the empirical CDF of a covariate before and after IPW adjustment.
@@ -766,8 +767,8 @@ class InversePropensityWeighting(BaseExperiment):
         covariate : str
             Name of the covariate column (must be one of the model's design
             matrix labels) to check for balance.
-        idata : az.InferenceData | None, optional
-            ArviZ InferenceData containing posterior propensity score samples.
+        idata : xr.DataTree | None, optional
+            DataTree containing posterior propensity score samples.
             If ``None``, uses ``self.model.idata``.
         weighting_scheme : str | None, optional
             Weighting scheme to apply.  One of ``'raw'``, ``'robust'``, or

@@ -106,8 +106,8 @@ class PrePostNEGD(BaseExperiment):
         super().__init__(model=model)
         self.causal_impact: xr.DataArray
         self.pred_xi: np.ndarray
-        self.pred_untreated: az.InferenceData
-        self.pred_treated: az.InferenceData
+        self.pred_untreated: xr.DataTree
+        self.pred_treated: xr.DataTree
         self.data = data
         self.expt_type = "Pretest/posttest Nonequivalent Group Design"
         self.formula = formula

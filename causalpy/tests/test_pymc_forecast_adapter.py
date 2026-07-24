@@ -388,6 +388,56 @@ def test_clone_returns_unfitted_copy_with_same_config():
     assert cloned.idata is None
 
 
+def test_fit_produces_datatree_with_posterior():
+    """fit() wraps the thinned posterior subsample as a DataTree."""
+    model = make_forecast_model()
+    posterior = xr.Dataset(
+        {
+            "beta": (("chain", "draw", "coeffs"), np.ones((1, 2, 1))),
+            "sigma": (("chain", "draw"), np.ones((1, 2))),
+        },
+        coords={"coeffs": ["x"]},
+    )
+
+    class FakeForecaster:
+        def fit(self, *args, **kwargs):
+            return None
+
+        def draw_posterior(self, n, random_seed=None):
+            assert n == model.num_samples
+            return posterior
+
+    model.forecaster = FakeForecaster()
+    X, y = _design_arrays()
+    idata = model.fit(X, y)
+
+    assert isinstance(idata, xr.DataTree)
+    assert "posterior" in idata
+    assert model.idata is idata
+    assert set(idata["posterior"].to_dataset().data_vars) == {"beta", "sigma"}
+
+
+def test_to_inference_data_yields_datatree_posterior_predictive():
+    """_to_inference_data returns a DataTree with a posterior_predictive group."""
+    model = make_forecast_model()
+    model._treated_units = ["unit_0"]
+    obs_ind = pd.date_range("2020-01-01", periods=3, freq="D").to_numpy()
+    mu = xr.DataArray(np.ones((1, 2, 3)), dims=("chain", "draw", "obs_ind"))
+    y_hat = mu.copy()
+
+    out = model._to_inference_data(mu, y_hat, obs_ind)
+
+    assert isinstance(out, xr.DataTree)
+    assert "posterior_predictive" in out
+    pp = out["posterior_predictive"]
+    assert "mu" in pp and "y_hat" in pp
+    assert pp["mu"].dims == ("chain", "draw", "obs_ind", "treated_units")
+    np.testing.assert_array_equal(
+        pp["mu"].coords["obs_ind"].values.astype("datetime64[ns]"),
+        obs_ind.astype("datetime64[ns]"),
+    )
+
+
 @pytest.mark.integration
 def test_fit_idata_exposes_full_fit_result(forecast_result):
     """fit_idata is the full NUTS result; idata the thinned draw-coherent

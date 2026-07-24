@@ -11,10 +11,10 @@
 #   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #   See the License for the specific language governing permissions and
 #   limitations under the License.
-import arviz as az
 import numpy as np
 import pandas as pd
 import pytest
+import xarray as xr
 from matplotlib import pyplot as plt
 
 import causalpy as cp
@@ -59,7 +59,7 @@ def test_its_with_bsts_model():
 
     # Basic checks
     assert isinstance(result, cp.InterruptedTimeSeries)
-    assert isinstance(result.idata, az.InferenceData)
+    assert isinstance(result.idata, xr.DataTree)
 
     # Plot and plot data
     fig, ax = result.plot()
@@ -125,7 +125,7 @@ def test_its_with_state_space_model():
     )
 
     assert isinstance(result, cp.InterruptedTimeSeries)
-    assert isinstance(result.idata, az.InferenceData)
+    assert isinstance(result.idata, xr.DataTree)
 
     # In-sample predictions should be available
     fig, ax = result.plot()
@@ -166,7 +166,21 @@ def test_state_space_predict_and_score():
     # Split into train/test
     train_dates = dates[:50]
     test_dates = dates[50:]
-    y_train = y[:50]
+    y_train = xr.DataArray(
+        y[:50, np.newaxis],
+        dims=["obs_ind", "treated_units"],
+        coords={"obs_ind": train_dates, "treated_units": ["unit_0"]},
+    )
+    X_train = xr.DataArray(
+        np.zeros((len(train_dates), 0)),
+        dims=["obs_ind", "coeffs"],
+        coords={"obs_ind": train_dates, "coeffs": []},
+    )
+    X_test = xr.DataArray(
+        np.zeros((len(test_dates), 0)),
+        dims=["obs_ind", "coeffs"],
+        coords={"obs_ind": test_dates, "coeffs": []},
+    )
 
     sample_kwargs = {
         "chains": 1,
@@ -183,26 +197,32 @@ def test_state_space_predict_and_score():
         mode="PyMC",
     )
 
-    # Fit the model
-    coords_train = {"datetime_index": train_dates}
-    model.fit(X=None, y=y_train, coords=coords_train)
+    # Fit the model.
+    model.fit(X=X_train, y=y_train)
 
-    # Test in-sample prediction (out_of_sample=False)
-    pred_in_sample = model.predict(X=None, coords=coords_train, out_of_sample=False)
-    assert pred_in_sample is not None
-    assert "posterior_predictive" in pred_in_sample or "y_hat" in pred_in_sample
+    # Test in-sample prediction.
+    pred_in_sample = model.predict(X=X_train, out_of_sample=False)
+    assert isinstance(pred_in_sample, xr.DataTree)
+    assert "posterior_predictive" in pred_in_sample
+    in_sample_pp = pred_in_sample["posterior_predictive"].to_dataset()
+    assert {"y_hat", "mu"} <= set(in_sample_pp.data_vars)
+    np.testing.assert_array_equal(
+        in_sample_pp.coords["obs_ind"].values, X_train.coords["obs_ind"].values
+    )
 
-    # Test out-of-sample prediction (out_of_sample=True)
-    coords_test = {"datetime_index": test_dates}
-    pred_out_of_sample = model.predict(X=None, coords=coords_test, out_of_sample=True)
-    assert pred_out_of_sample is not None
-    # StateSpaceTimeSeries.predict returns xr.Dataset for out_of_sample
-    assert "y_hat" in pred_out_of_sample or "forecast_observed" in pred_out_of_sample
+    # Test out-of-sample prediction with the target datetime coordinates.
+    pred_out_of_sample = model.predict(X=X_test, out_of_sample=True)
+    assert isinstance(pred_out_of_sample, xr.DataTree)
+    assert "posterior_predictive" in pred_out_of_sample
+    posterior_predictive = pred_out_of_sample["posterior_predictive"].to_dataset()
+    assert "y_hat" in posterior_predictive
+    np.testing.assert_array_equal(
+        posterior_predictive.coords["obs_ind"].values, X_test.coords["obs_ind"].values
+    )
 
-    # Test score method
-    score = model.score(X=None, y=y_train, coords=coords_train)
+    score = model.score(X=X_train, y=y_train)
     assert isinstance(score, pd.Series)
-    assert "r2" in score
+    assert "unit_0_r2" in score
 
 
 @pytest.mark.integration

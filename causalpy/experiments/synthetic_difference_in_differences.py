@@ -18,13 +18,13 @@ Synthetic Difference-in-Differences Experiment.
 import warnings
 from typing import Any, Literal
 
-import arviz as az
 import numpy as np
 import pandas as pd
 import xarray as xr
 from matplotlib import pyplot as plt
 from sklearn.base import RegressorMixin
 
+from causalpy._arviz_compat import hdi_bounds
 from causalpy.constants import HDI_PROB
 from causalpy.custom_exceptions import BadIndexException
 from causalpy.date_utils import _combine_datetime_indices, format_date_axes
@@ -460,7 +460,7 @@ class SyntheticDifferenceInDifferences(BaseExperiment):
 
         Sets the following attributes on ``self``:
 
-        - ``pre_pred`` / ``post_pred``: ``az.InferenceData`` objects holding
+        - ``pre_pred`` / ``post_pred``: ``xr.DataTree`` objects holding
           the synthetic-control predictions in a ``posterior_predictive``
           group.
         - ``pre_impact`` / ``post_impact``: ``xr.DataArray`` of observed
@@ -525,10 +525,10 @@ class SyntheticDifferenceInDifferences(BaseExperiment):
         index: pd.Index,
         n_chains: int,
         n_draws: int,
-    ) -> az.InferenceData:
-        """Build an InferenceData-like object with posterior_predictive group.
+    ) -> xr.DataTree:
+        """Build a DataTree with a posterior_predictive group.
 
-        Constructs a minimal InferenceData containing a ``mu`` variable in the
+        Constructs a minimal DataTree containing a ``mu`` variable in the
         ``posterior_predictive`` group, shaped to be compatible with the
         reporting helpers that expect SC-style predictions.
 
@@ -545,8 +545,8 @@ class SyntheticDifferenceInDifferences(BaseExperiment):
 
         Returns
         -------
-        az.InferenceData
-            InferenceData with posterior_predictive group containing ``mu``.
+        xr.DataTree
+            DataTree with posterior_predictive group containing ``mu``.
         """
         # Add a singleton treated_units dim: (chain, draw, T, 1)
         mu_4d = mu_vals[..., np.newaxis]
@@ -562,7 +562,7 @@ class SyntheticDifferenceInDifferences(BaseExperiment):
             },
         )
         ds = xr.Dataset({"mu": mu_da})
-        return az.InferenceData(posterior_predictive=ds)
+        return xr.DataTree.from_dict({"posterior_predictive": ds})
 
     def summary(self, round_to: int | None = None) -> None:
         """Print summary of main results.
@@ -583,14 +583,15 @@ class SyntheticDifferenceInDifferences(BaseExperiment):
             print(f"Treated unit: {self.treated_units[0]}")
 
         tau_mean = float(self.tau_posterior.mean())
-        tau_hdi = az.hdi(self.tau_posterior.values.flatten(), hdi_prob=0.94)
+        tau_lower, tau_upper = hdi_bounds(
+            self.tau_posterior.values, prob=HDI_PROB, flatten_chains_draws=True
+        )
         print(
             f"Average treatment effect on the treated (ATT): "
             f"{round(tau_mean, round_to)}"
         )
         print(
-            f"  94% HDI: [{round(float(tau_hdi[0]), round_to)}, "
-            f"{round(float(tau_hdi[1]), round_to)}]"
+            f"  94% HDI: [{round(tau_lower, round_to)}, {round(tau_upper, round_to)}]"
         )
 
     def plot(

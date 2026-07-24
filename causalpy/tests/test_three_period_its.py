@@ -146,11 +146,10 @@ def test_three_period_pymc_datetime_index(datetime_data, mock_pymc_sample):
     assert isinstance(result.data_post_intervention, pd.DataFrame)
 
     # Check PyMC-specific types
-    import arviz as az
     import xarray as xr
 
-    assert isinstance(result.intervention_pred, az.InferenceData)
-    assert isinstance(result.post_intervention_pred, az.InferenceData)
+    assert isinstance(result.intervention_pred, xr.DataTree)
+    assert isinstance(result.post_intervention_pred, xr.DataTree)
     # For PyMC models, post_impact is always xarray DataArray
     assert isinstance(result.intervention_impact, xr.DataArray)
     assert isinstance(result.post_intervention_impact, xr.DataArray)
@@ -189,11 +188,10 @@ def test_three_period_pymc_integer_index(integer_data, mock_pymc_sample):
     assert isinstance(result.data_post_intervention, pd.DataFrame)
 
     # Check PyMC-specific types
-    import arviz as az
     import xarray as xr
 
-    assert isinstance(result.intervention_pred, az.InferenceData)
-    assert isinstance(result.post_intervention_pred, az.InferenceData)
+    assert isinstance(result.intervention_pred, xr.DataTree)
+    assert isinstance(result.post_intervention_pred, xr.DataTree)
     # For PyMC models, post_impact is always xarray DataArray
     assert isinstance(result.intervention_impact, xr.DataArray)
     assert isinstance(result.post_intervention_impact, xr.DataArray)
@@ -832,19 +830,25 @@ def test_intervention_pred_is_slice_of_post_pred(datetime_data, mock_pymc_sample
         model=cp.pymc_models.LinearRegression(sample_kwargs=sample_kwargs),
     )
 
-    # For PyMC models, check that intervention_pred is InferenceData
-    assert hasattr(result.intervention_pred, "posterior_predictive")
+    # For PyMC models, intervention_pred is a DataTree.
+    import xarray as xr
 
-    # Extract mu from both
+    assert isinstance(result.intervention_pred, xr.DataTree)
+
     intervention_mu = result.intervention_pred.posterior_predictive["mu"]
     post_mu = result.post_pred.posterior_predictive["mu"]
-
-    # Check that intervention_mu is a subset of post_mu
     intervention_coords = result.data_intervention.index
     post_mu_intervention = post_mu.sel(obs_ind=intervention_coords)
 
-    # They should have the same shape
     assert intervention_mu.shape == post_mu_intervention.shape
+    xr.testing.assert_allclose(intervention_mu, post_mu_intervention)
+
+    post_intervention_mu = result.post_intervention_pred.posterior_predictive["mu"]
+    post_intervention_coords = result.data_post_intervention.index
+    xr.testing.assert_allclose(
+        post_intervention_mu,
+        post_mu.sel(obs_ind=post_intervention_coords),
+    )
 
 
 # ==============================================================================
@@ -1056,3 +1060,212 @@ def test_plot_two_period_backward_compatible(datetime_data, mock_pymc_sample):
     # Should only have treatment_time line, not treatment_end_time
     assert fig is not None
     assert ax is not None
+
+
+def test_get_plot_data_bayesian_uses_hdi_for_skewed_impacts(monkeypatch):
+    """Impact columns use HDI bounds rather than equal-tailed quantiles."""
+    from types import SimpleNamespace
+
+    import xarray as xr
+
+    from causalpy.experiments import interrupted_time_series as its_module
+    from causalpy.experiments.interrupted_time_series import InterruptedTimeSeries
+    from causalpy.plot_utils import get_hdi_to_df
+
+    pre_index = pd.Index(["pre_0", "pre_1"], name="obs_ind")
+    post_index = pd.Index(["post_0", "post_1"], name="obs_ind")
+    rng = np.random.default_rng(42)
+
+    def posterior(values, index):
+        return xr.DataArray(
+            values,
+            dims=["chain", "draw", "obs_ind"],
+            coords={"obs_ind": index},
+        )
+
+    pre_impact = posterior(rng.exponential(size=(2, 200, 2)), pre_index)
+    post_impact = posterior(rng.exponential(size=(2, 200, 2)), post_index)
+    pre_mu = posterior(rng.normal(size=(2, 200, 2)), pre_index)
+    post_mu = posterior(rng.normal(size=(2, 200, 2)), post_index)
+
+    def prediction_idata(mu):
+        return {
+            "posterior_predictive": SimpleNamespace(mu=mu),
+            "extract": mu.stack(sample=("chain", "draw")).transpose(
+                "obs_ind", "sample"
+            ),
+        }
+
+    monkeypatch.setattr(
+        its_module.az,
+        "extract",
+        lambda idata, **kwargs: idata["extract"],
+    )
+    result = SimpleNamespace(
+        _model_backend=SimpleNamespace(is_bayesian=True),
+        datapre=pd.DataFrame({"y": [0.0, 0.0]}, index=pre_index),
+        datapost=pd.DataFrame({"y": [0.0, 0.0]}, index=post_index),
+        pre_pred=prediction_idata(pre_mu),
+        post_pred=prediction_idata(post_mu),
+        pre_impact=pre_impact,
+        post_impact=post_impact,
+    )
+
+    plot_data = InterruptedTimeSeries.get_plot_data_bayesian(result)
+    expected = get_hdi_to_df(pre_impact).reindex(pre_index)
+    observed = plot_data.loc[
+        pre_index, ["impact_hdi_lower_94", "impact_hdi_upper_94"]
+    ].to_numpy()
+    eti = pre_impact.quantile([0.03, 0.97], dim=["chain", "draw"]).values.T
+
+    np.testing.assert_allclose(observed, expected.to_numpy())
+    assert not np.allclose(observed, eti)
+
+
+def test_comparison_period_summary_uses_frozen_hdi_bounds():
+    """Comparative-summary HDIs retain the ArviZ 0.22 94% baseline."""
+    from types import SimpleNamespace
+
+    import xarray as xr
+
+    from causalpy.experiments.interrupted_time_series import InterruptedTimeSeries
+
+    rng = np.random.default_rng(321)
+
+    def impact():
+        return xr.DataArray(
+            rng.exponential(size=(2, 200, 2)),
+            dims=["chain", "draw", "obs_ind"],
+        )
+
+    result = SimpleNamespace(
+        _model_backend=SimpleNamespace(is_bayesian=True),
+        intervention_impact=impact(),
+        post_intervention_impact=impact(),
+    )
+
+    summary = InterruptedTimeSeries._comparison_period_summary(
+        result,
+        alpha=0.06,
+        cumulative=False,
+        relative=False,
+    )
+
+    assert tuple(
+        summary.table.loc["intervention", ["hdi_lower", "hdi_upper"]]
+    ) == pytest.approx(
+        (0.07791736162436769, 2.333331414052698),
+        rel=1e-12,
+        abs=1e-12,
+    )
+    assert tuple(
+        summary.table.loc["post_intervention", ["hdi_lower", "hdi_upper"]]
+    ) == pytest.approx(
+        (0.05178753076996489, 2.3244471772455273),
+        rel=1e-12,
+        abs=1e-12,
+    )
+
+
+def test_bayesian_plot_forwards_ci_prob_to_all_singleton_hdi_markers(monkeypatch):
+    """All singleton overlays use the caller's HDI probability."""
+    from types import SimpleNamespace
+
+    import matplotlib.pyplot as plt
+    import xarray as xr
+
+    from causalpy.experiments import interrupted_time_series as its_module
+    from causalpy.experiments.interrupted_time_series import InterruptedTimeSeries
+
+    def draws(obs_ind, offset=0.0):
+        return xr.DataArray(
+            np.arange(6 * len(obs_ind), dtype=float).reshape(2, 3, len(obs_ind))
+            + offset,
+            dims=["chain", "draw", "obs_ind"],
+            coords={"obs_ind": obs_ind},
+        )
+
+    def design(obs_ind):
+        return xr.Dataset(
+            {
+                "y": xr.DataArray(
+                    np.arange(len(obs_ind), dtype=float).reshape(-1, 1),
+                    dims=["obs_ind", "treated_units"],
+                    coords={"obs_ind": obs_ind, "treated_units": ["unit_0"]},
+                )
+            }
+        )
+
+    pre_index, post_index = pd.Index([0, 1]), pd.Index([2])
+    pre_mu, post_mu = draws(pre_index), draws(post_index, offset=1.0)
+    stub = SimpleNamespace(
+        datapre=pd.DataFrame(index=pre_index),
+        datapost=pd.DataFrame(index=post_index),
+        pre_pred={"posterior_predictive": SimpleNamespace(mu=pre_mu)},
+        post_pred={"posterior_predictive": SimpleNamespace(mu=post_mu)},
+        pre_design=design(pre_index),
+        post_design=design(post_index),
+        pre_impact=draws(pre_index, offset=-1.0),
+        post_impact=draws(post_index, offset=-1.0),
+        post_impact_cumulative=draws(post_index, offset=-2.0),
+        score=pd.Series(dtype=float),
+        treatment_time=2,
+        treatment_end_time=None,
+    )
+    probabilities = []
+
+    def fake_plot_posterior(x, posterior, *, ax, **kwargs):
+        return ax.plot([], [])[0], ax.fill_between([], [], [])
+
+    def fake_singleton_marker(ax, x, posterior, *, color, hdi_prob):
+        probabilities.append(hdi_prob)
+        return ax.plot([], [])[0]
+
+    stub._draw_singleton_hdi_marker = fake_singleton_marker
+
+    monkeypatch.setattr(its_module, "plot_posterior_over_x", fake_plot_posterior)
+    monkeypatch.setattr(
+        its_module.az,
+        "extract",
+        lambda *args, **kwargs: post_mu.stack(sample=("chain", "draw")),
+    )
+
+    fig, _ = InterruptedTimeSeries._bayesian_plot(stub, ci_prob=0.8)
+
+    assert probabilities == [0.8, 0.8, 0.8]
+    plt.close(fig)
+
+
+def test_analyze_persistence_forwards_custom_hdi_probability(monkeypatch, capsys):
+    """Persistence HDIs use the caller's probability for both periods."""
+    from types import SimpleNamespace
+
+    import xarray as xr
+
+    from causalpy.experiments import interrupted_time_series as its_module
+    from causalpy.experiments.interrupted_time_series import InterruptedTimeSeries
+
+    draws = xr.DataArray(
+        np.arange(24, dtype=float).reshape(2, 3, 4),
+        dims=["chain", "draw", "obs_ind"],
+    )
+    calls = []
+
+    def fake_hdi_bounds(data, *, prob):
+        calls.append(prob)
+        return (prob, prob + 0.01)
+
+    stub = SimpleNamespace(
+        treatment_end_time=2,
+        _model_backend=SimpleNamespace(is_bayesian=True),
+        intervention_impact=draws.isel(obs_ind=slice(0, 2)),
+        post_intervention_impact=draws.isel(obs_ind=slice(2, None)),
+        intervention_impact_cumulative=draws.isel(obs_ind=slice(0, 2)),
+        post_intervention_impact_cumulative=draws.isel(obs_ind=slice(2, None)),
+    )
+    monkeypatch.setattr(its_module, "hdi_bounds", fake_hdi_bounds)
+
+    InterruptedTimeSeries.analyze_persistence(stub, hdi_prob=0.9)
+
+    assert calls == [0.9, 0.9]
+    assert "90% HDI: [0.90, 0.91]" in capsys.readouterr().out

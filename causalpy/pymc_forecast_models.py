@@ -61,7 +61,7 @@ as `pymc-forecast#50 <https://github.com/pymc-labs/pymc-forecast/issues/50>`_.
 
 Inference diagnostics: :attr:`PyMCForecastModel.idata` holds the thinned,
 draw-coherent posterior subsample used for prediction; the *full* fit result
-(e.g. the complete NUTS ``InferenceData`` with sample stats) is exposed as
+(e.g. the complete NUTS ``DataTree`` with sample stats) is exposed as
 :attr:`PyMCForecastModel.fit_idata`.
 """
 
@@ -190,7 +190,7 @@ class PyMCForecastModel:
             random_seed=self.random_seed,
             **self.forecaster_kwargs,
         )
-        self.idata: az.InferenceData | None = None
+        self.idata: xr.DataTree | None = None
         self._posterior: xr.Dataset | None = None
         self._treated_units: list[str] = ["unit_0"]
         self._has_covariates = False
@@ -212,11 +212,11 @@ class PyMCForecastModel:
         )
 
     @property
-    def fit_idata(self) -> az.InferenceData:
+    def fit_idata(self) -> xr.DataTree:
         """Full inference result of the underlying forecaster fit.
 
         For the default NUTS backend this is the complete MCMC
-        ``InferenceData`` (posterior, sample stats, diagnostics) — as
+        ``DataTree`` (posterior, sample stats, diagnostics) — as
         distinct from :attr:`idata`, which holds the thinned posterior
         subsample shared by every predictive call for draw coherence.
 
@@ -225,7 +225,7 @@ class PyMCForecastModel:
         RuntimeError
             If the model has not been fit yet.
         AttributeError
-            If the forecaster does not retain an ``InferenceData`` fit
+            If the forecaster does not retain a ``DataTree`` fit
             result (e.g. variational fits, which expose ``.approx`` /
             ``.losses`` on ``.forecaster`` instead).
         """
@@ -235,7 +235,7 @@ class PyMCForecastModel:
         if fit_result is None:
             raise AttributeError(
                 f"{type(self.forecaster).__name__} does not retain a full "
-                "InferenceData fit result; inspect the forecaster directly "
+                "DataTree fit result; inspect the forecaster directly "
                 "via `.forecaster` (e.g. `.approx` / `.losses` for "
                 "variational fits)."
             )
@@ -245,7 +245,7 @@ class PyMCForecastModel:
 
     def fit(
         self, X: xr.DataArray, y: xr.DataArray, coords: dict[str, Any] | None = None
-    ) -> az.InferenceData:
+    ) -> xr.DataTree:
         """Construct and fit the forecasting model on the pre-period.
 
         Parameters
@@ -278,7 +278,7 @@ class PyMCForecastModel:
         self._posterior = self.forecaster.draw_posterior(
             self.num_samples, random_seed=self.random_seed
         )
-        self.idata = az.InferenceData(posterior=self._posterior)
+        self.idata = xr.DataTree.from_dict({"posterior": self._posterior})
         return self.idata
 
     @staticmethod
@@ -296,7 +296,7 @@ class PyMCForecastModel:
         coords: dict[str, Any] | None = None,
         out_of_sample: bool | None = False,
         **kwargs: Any,
-    ) -> az.InferenceData:
+    ) -> xr.DataTree:
         """Predict in-sample (pre-period) or forecast the counterfactual.
 
         Parameters
@@ -316,7 +316,7 @@ class PyMCForecastModel:
 
         Returns
         -------
-        az.InferenceData
+        xr.DataTree
             With a ``posterior_predictive`` group holding draw-level ``mu``
             (the noise-free latent predictor) and ``y_hat`` (the posterior
             predictive of the observed variable) with dims
@@ -355,8 +355,8 @@ class PyMCForecastModel:
 
     def _to_inference_data(
         self, mu: xr.DataArray, y_hat: xr.DataArray, obs_ind: np.ndarray
-    ) -> az.InferenceData:
-        """Rename schema dims onto CausalPy coords and wrap as InferenceData."""
+    ) -> xr.DataTree:
+        """Rename schema dims onto CausalPy coords and wrap as a DataTree."""
 
         def normalize(samples: xr.DataArray) -> xr.DataArray:
             if "series" in samples.dims:
@@ -368,7 +368,7 @@ class PyMCForecastModel:
             )
 
         ds = xr.Dataset({"mu": normalize(mu), "y_hat": normalize(y_hat)})
-        return az.InferenceData(posterior_predictive=ds)
+        return xr.DataTree.from_dict({"posterior_predictive": ds})
 
     # -- scoring and impact ------------------------------------------------
 
@@ -401,7 +401,7 @@ class PyMCForecastModel:
         return pd.Series(scores)
 
     def calculate_impact(
-        self, y_true: xr.DataArray, y_pred: az.InferenceData
+        self, y_true: xr.DataArray, y_pred: xr.DataTree
     ) -> xr.DataArray:
         """Causal impact as observed minus counterfactual, at the draw level.
 
@@ -409,7 +409,7 @@ class PyMCForecastModel:
         ----------
         y_true : xr.DataArray
             Observed outcomes with dims ``["obs_ind", "treated_units"]``.
-        y_pred : az.InferenceData
+        y_pred : xr.DataTree
             Counterfactual prediction from :meth:`predict`.
         """
         y_hat = y_pred["posterior_predictive"]["mu"]

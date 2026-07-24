@@ -22,12 +22,13 @@ individual steps without paying the cost of a full MCMC run.
 from types import SimpleNamespace
 from typing import Any, Protocol
 
-import arviz as az
 import numpy as np
 import pandas as pd
 import pytest
 import xarray as xr
 
+from causalpy._arviz_compat import hdi_bounds
+from causalpy.constants import HDI_PROB
 from causalpy.custom_exceptions import BadIndexException
 from causalpy.experiments.synthetic_difference_in_differences import (
     SyntheticDifferenceInDifferences,
@@ -174,7 +175,7 @@ class TestExtractWeightPosteriors:
                 "omega0": (("chain", "draw"), omega0_true),
             }
         )
-        idata = az.InferenceData(posterior=posterior)
+        idata = xr.DataTree.from_dict({"posterior": posterior})
         stub = _make_experiment_stub(model=SimpleNamespace(idata=idata))
 
         omega, omega0, lam, n_ch, n_dr = stub._extract_weight_posteriors()
@@ -262,12 +263,20 @@ class TestBuildReportingObjects:
 
         stub._build_reporting_objects(sc_all, toy_panel.T_pre, n_chains, n_draws)
 
-        # pre_pred / post_pred are InferenceData with a 'mu' variable in
+        # pre_pred / post_pred are DataTrees with a 'mu' variable in
         # the posterior_predictive group.
-        assert isinstance(stub.pre_pred, az.InferenceData)
-        assert isinstance(stub.post_pred, az.InferenceData)
+        assert isinstance(stub.pre_pred, xr.DataTree)
+        assert isinstance(stub.post_pred, xr.DataTree)
         assert "mu" in stub.pre_pred.posterior_predictive
         assert "mu" in stub.post_pred.posterior_predictive
+        for prediction, index in (
+            (stub.pre_pred, toy_panel.data.index[: toy_panel.T_pre]),
+            (stub.post_pred, toy_panel.data.index[toy_panel.T_pre :]),
+        ):
+            mu = prediction["posterior_predictive"].to_dataset()["mu"]
+            assert mu.dims == ("chain", "draw", "obs_ind", "treated_units")
+            np.testing.assert_array_equal(mu.coords["obs_ind"].values, index.values)
+            assert mu.coords["treated_units"].values.tolist() == toy_panel.treated_units
 
         # pre_impact / post_impact are xr.DataArrays with the correct dims.
         for impact, expected_len in (
@@ -384,6 +393,65 @@ class TestSummaryMultiTreated:
         captured = capsys.readouterr().out
         assert "Treated units: ['t0', 't1']" in captured
         assert "Treated unit:" not in captured
+
+
+class TestSummaryHdiPooling:
+    """``summary`` pools raw ``(chain, draw)`` tau through ``hdi_bounds``."""
+
+    def test_summary_hdi_pools_chain_draw_ndarray(self, capsys):
+        """Frozen pooled 94% HDI for a seeded raw ``tau_posterior`` array.
+
+        Uses the same draws as the compat helper baseline. Per-chain bounds
+        differ, so a missing ``flatten_chains_draws=True`` cannot match.
+        """
+        rng = np.random.default_rng(42)
+        samples = rng.normal(loc=2.0, scale=1.0, size=(4, 200))
+        stub = _make_experiment_stub(
+            control_units=["c0"],
+            treated_units=["t0"],
+        )
+        stub.expt_type = "SyntheticDifferenceInDifferences"
+        stub.tau_posterior = xr.DataArray(samples, dims=["chain", "draw"])
+
+        expected_lower = 0.21329248863192207
+        expected_upper = 3.8478250129560454
+        chain0_lower, _ = hdi_bounds(samples[0], prob=HDI_PROB)
+        assert round(expected_lower, 2) != round(chain0_lower, 2)
+
+        stub.summary()
+        captured = capsys.readouterr().out
+        assert (
+            f"94% HDI: [{round(expected_lower, 2)}, {round(expected_upper, 2)}]"
+            in captured
+        )
+
+    def test_summary_passes_flatten_chains_draws(self, monkeypatch, capsys):
+        seen: dict[str, object] = {}
+
+        def fake_hdi_bounds(data, *, prob=None, flatten_chains_draws=False, **kwargs):
+            seen["prob"] = prob
+            seen["flatten_chains_draws"] = flatten_chains_draws
+            seen["shape"] = np.asarray(data).shape
+            return -1.25, 4.5
+
+        monkeypatch.setattr(
+            "causalpy.experiments.synthetic_difference_in_differences.hdi_bounds",
+            fake_hdi_bounds,
+        )
+        stub = _make_experiment_stub(
+            control_units=["c0"],
+            treated_units=["t0"],
+        )
+        stub.expt_type = "SyntheticDifferenceInDifferences"
+        stub.tau_posterior = xr.DataArray(
+            np.zeros((2, 5)),
+            dims=["chain", "draw"],
+        )
+        stub.summary()
+        assert seen["flatten_chains_draws"] is True
+        assert seen["prob"] == HDI_PROB
+        assert seen["shape"] == (2, 5)
+        assert "94% HDI: [-1.25, 4.5]" in capsys.readouterr().out
 
 
 class TestConvertTreatmentTimeForAxis:
