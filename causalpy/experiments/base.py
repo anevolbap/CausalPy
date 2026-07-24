@@ -23,7 +23,6 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Literal
 
-import arviz as az
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -375,7 +374,7 @@ class BaseExperiment(ABC):
         ...     legend_kwargs={"loc": "upper left", "bbox_to_anchor": (1.04, 1)},
         ... )
         """
-        with plt.style.context(az.style.library["arviz-darkgrid"]):
+        with plt.style.context("arviz-darkgrid"):
             if self._model_backend.is_bayesian:
                 fig, ax = self._bayesian_plot(**draw_kwargs)
             elif self._model_backend.is_ols:
