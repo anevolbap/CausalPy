@@ -202,9 +202,16 @@ class TestRoundTripAgainstPyMCBackend:
         plot_df = forecast_result.get_plot_data_bayesian()
         assert {"prediction", "impact"}.issubset(plot_df.columns)
 
-    def test_summaries_and_plot_data_without_plotting(self, forecast_result, capsys):
+    def test_summaries_and_plot_data_without_plotting(
+        self, forecast_result, capsys, monkeypatch
+    ):
         """Forecast summary and plot-data contracts remain observable when
         generic plotting is unavailable."""
+
+        def fail_if_plot_called(*args, **kwargs):
+            raise AssertionError("summary helpers must not call plot()")
+
+        monkeypatch.setattr(forecast_result, "plot", fail_if_plot_called)
         forecast_result.summary()
         assert "Model parameters:" in capsys.readouterr().out
         summary = forecast_result.effect_summary()
@@ -356,6 +363,11 @@ def test_unfit_adapter_has_no_idata_or_coefficients():
         _ = adapter.idata
     with pytest.raises(NotImplementedError, match="design-matrix coefficients"):
         adapter.coefficients()
+
+
+def test_print_coefficients_before_fit_raises():
+    with pytest.raises(RuntimeError, match="has not been fit"):
+        make_forecast_model().print_coefficients([])
 
 
 @pytest.mark.integration
@@ -531,22 +543,31 @@ class TestPlaceboInTime:
     ):
         """The PipelineContext factory path preserves the forecast backend."""
         df, treatment_time = its_data
+        configured_model = make_forecast_model()
         context = cp.PipelineContext(data=df)
         context.experiment = forecast_result
         context.experiment_config = {
             "method": cp.InterruptedTimeSeries,
             "treatment_time": treatment_time,
             "formula": "y ~ 1 + t",
-            "model": make_forecast_model(),
+            "model": configured_model,
         }
 
-        result = cp.checks.PlaceboInTime(n_folds=1, random_seed=42).run(
-            forecast_result, context
+        check = cp.checks.PlaceboInTime(
+            n_folds=1,
+            sample_kwargs={
+                "draws": 100,
+                "tune": 100,
+                "chains": 2,
+                "progressbar": False,
+            },
+            random_seed=42,
         )
-        assert len(result.metadata["fold_results"]) == 1
-        assert isinstance(
-            result.metadata["fold_results"][0].experiment.model, PyMCForecastModel
-        )
+        result = check.run(forecast_result, context)
+        fold_model = result.metadata["fold_results"][0].experiment.model
+        assert isinstance(fold_model, PyMCForecastModel)
+        assert fold_model is not configured_model
+        assert fold_model.idata is not None
 
 
 def test_pymc_forecast_02_prediction_schema_contract():
