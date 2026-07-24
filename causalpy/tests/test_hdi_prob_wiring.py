@@ -351,7 +351,7 @@ _PIECEWISE_TARGETS: list[_SpyTarget] = [
     ("causalpy.experiments.piecewise_its.plot_posterior_over_x", "ci_prob"),
 ]
 _PANEL_TARGETS: list[_SpyTarget] = [
-    ("causalpy.experiments.panel_regression.az.plot_forest", "hdi_prob"),
+    ("causalpy.experiments.panel_regression.hdi_bound_arrays", "prob"),
 ]
 
 

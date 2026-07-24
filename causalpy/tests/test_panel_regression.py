@@ -19,9 +19,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import pytest
+from matplotlib.collections import PolyCollection
 from sklearn.linear_model import LinearRegression
 
 import causalpy as cp
+from causalpy._arviz_compat import hdi_bound_arrays
 
 # Minimal sample kwargs for fast tests
 sample_kwargs = {"tune": 20, "draws": 20, "chains": 2, "cores": 2, "progressbar": False}
@@ -846,3 +848,135 @@ def test_plot_unit_effects_no_fe_labels(small_panel_data):
 
     with pytest.raises(ValueError, match="No unit fixed effects found"):
         result.plot_unit_effects()
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("hdi_prob", [0.5, 0.94])
+def test_panel_bayesian_coefficient_forest_preserves_axes_and_hdi_bounds(
+    mock_pymc_sample,
+    small_panel_data,
+    hdi_prob,
+):
+    """Bayesian coefficient plotting stays on one Axes with explicit HDI bounds."""
+    result = cp.PanelRegression(
+        data=small_panel_data,
+        formula="y ~ C(unit) + C(time) + treatment + x1",
+        unit_fe_variable="unit",
+        time_fe_variable="time",
+        fe_method="dummies",
+        model=cp.pymc_models.LinearRegression(sample_kwargs=sample_kwargs),
+    )
+    coeff_names = ["treatment", "x1"]
+
+    fig, ax = result.plot_coefficients(var_names=coeff_names, hdi_prob=hdi_prob)
+
+    assert isinstance(fig, plt.Figure)
+    assert isinstance(ax, plt.Axes)
+    assert [tick.get_text() for tick in ax.get_yticklabels()] == coeff_names
+    assert f"{hdi_prob:.0%} HDI" in ax.get_title()
+
+    coefficients = result.model.idata.posterior["beta"].sel(coeffs=coeff_names)
+    coefficients = coefficients.squeeze("treated_units", drop=True)
+    lower, upper = hdi_bound_arrays(
+        coefficients,
+        prob=hdi_prob,
+        dim=["chain", "draw"],
+    )
+    error_segments = ax.collections[0].get_segments()
+    for segment, expected_lower, expected_upper in zip(
+        error_segments,
+        lower,
+        upper,
+        strict=True,
+    ):
+        np.testing.assert_allclose(
+            np.sort(segment[:, 0]),
+            [expected_lower, expected_upper],
+        )
+    plt.close(fig)
+
+
+def test_panel_plot_coefficients_rejects_empty_selection(small_panel_data):
+    """An empty requested coefficient list raises instead of creating a blank plot."""
+    result = cp.PanelRegression(
+        data=small_panel_data,
+        formula="y ~ C(unit) + C(time) + treatment + x1",
+        unit_fe_variable="unit",
+        time_fe_variable="time",
+        fe_method="dummies",
+        model=LinearRegression(),
+    )
+
+    with pytest.raises(ValueError, match="at least one coefficient"):
+        result.plot_coefficients(var_names=[])
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("hdi_prob", [0.5, 0.94])
+def test_panel_trajectory_hdi_band_preserves_fitted_line_and_legend(
+    mock_pymc_sample,
+    small_panel_data,
+    hdi_prob,
+):
+    """Trajectory bands use the selected interval without duplicating Fitted."""
+    result = cp.PanelRegression(
+        data=small_panel_data,
+        formula="y ~ C(unit) + C(time) + treatment + x1",
+        unit_fe_variable="unit",
+        time_fe_variable="time",
+        fe_method="dummies",
+        model=cp.pymc_models.LinearRegression(sample_kwargs=sample_kwargs),
+    )
+
+    fig, axes = result.plot_trajectories(units=["unit_0"], hdi_prob=hdi_prob)
+
+    assert isinstance(axes, np.ndarray)
+    ax = axes[0]
+    fitted_lines = [line for line in ax.lines if line.get_label() == "Fitted"]
+    assert len(fitted_lines) == 1
+    assert [text.get_text() for text in ax.get_legend().get_texts()] == [
+        "Actual",
+        "Fitted",
+    ]
+
+    unit_indices = np.where(result.data["unit"] == "unit_0")[0]
+    sort_order = np.argsort(result.data.loc[result.data["unit"] == "unit_0", "time"])
+    sorted_indices = unit_indices[sort_order]
+    unit_mu = result.model.idata.posterior["mu"].isel(obs_ind=sorted_indices.tolist())
+    unit_mu = unit_mu.squeeze("treated_units", drop=True)
+    np.testing.assert_allclose(
+        fitted_lines[0].get_ydata(),
+        unit_mu.mean(dim=["chain", "draw"]).values,
+    )
+    lower, upper = hdi_bound_arrays(
+        unit_mu,
+        prob=hdi_prob,
+        dim=["chain", "draw"],
+    )
+    band = next(
+        collection
+        for collection in ax.collections
+        if isinstance(collection, PolyCollection)
+    )
+    vertices = band.get_paths()[0].vertices[:, 1]
+    for bound in np.concatenate([lower, upper]):
+        assert np.isclose(vertices, bound).any()
+    plt.close(fig)
+
+
+@pytest.mark.parametrize("select", ["random", "extreme", "high_variance"])
+def test_panel_plot_trajectories_rejects_empty_selection(small_panel_data, select):
+    """Every selection strategy rejects a non-positive sample size before plotting."""
+    result = cp.PanelRegression(
+        data=small_panel_data,
+        formula="y ~ C(unit) + C(time) + treatment + x1",
+        unit_fe_variable="unit",
+        time_fe_variable="time",
+        fe_method="dummies",
+        model=LinearRegression(),
+    )
+
+    with pytest.raises(ValueError, match="n_sample must be positive"):
+        result.plot_trajectories(n_sample=0, select=select)
+    with pytest.raises(ValueError, match="at least one unit"):
+        result.plot_trajectories(units=[])

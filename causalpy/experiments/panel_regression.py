@@ -16,7 +16,6 @@
 import re
 from typing import Any, Literal
 
-import arviz as az
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -25,10 +24,12 @@ from patsy import ModelDesc
 from scipy import stats
 from sklearn.base import RegressorMixin
 
+from causalpy._arviz_compat import hdi_bound_arrays
 from causalpy.constants import HDI_PROB
 from causalpy.custom_exceptions import DataException
 from causalpy.experiments.model_adapter import build_coords
 from causalpy.formula_utils import build_formula_matrices
+from causalpy.plot_utils import _plot_interval_band
 from causalpy.pymc_models import PyMCModel
 from causalpy.reporting import EffectSummary
 from causalpy.utils import round_num
@@ -598,18 +599,34 @@ class PanelRegression(BaseExperiment):
             raise ValueError("hdi_prob must be between 0 and 1")
 
         coeff_names = var_names if var_names is not None else self._get_non_fe_labels()
+        if not coeff_names:
+            raise ValueError("var_names must contain at least one coefficient")
 
         if self._model_backend.is_bayesian:
-            # Bayesian: use az.plot_forest directly
-            axes = az.plot_forest(
-                self.model.idata,
-                var_names=["beta"],
-                coords={"coeffs": coeff_names},
-                combined=True,
-                hdi_prob=hdi_prob,
+            coefficients = self.model.idata.posterior["beta"].sel(coeffs=coeff_names)  # type: ignore[union-attr]
+            if "treated_units" in coefficients.dims:
+                if coefficients.sizes["treated_units"] != 1:
+                    raise ValueError(
+                        "Bayesian coefficient plotting requires one treated unit"
+                    )
+                coefficients = coefficients.squeeze("treated_units", drop=True)
+            means = np.asarray(
+                coefficients.mean(dim=["chain", "draw"]).values,
+                dtype=float,
             )
-            ax = axes.ravel()[0]
-            fig = ax.figure
+            lower, upper = hdi_bound_arrays(
+                coefficients,
+                prob=hdi_prob,
+                dim=["chain", "draw"],
+            )
+            y_pos = np.arange(len(coeff_names))
+            fig, ax = plt.subplots(figsize=(10, max(4, len(coeff_names) * 0.5)))
+            ax.hlines(y_pos, lower, upper, color="C0")
+            ax.plot(means, y_pos, "o", color="C0")
+            ax.set_yticks(y_pos)
+            ax.set_yticklabels(coeff_names)
+            ax.axvline(x=0, color="black", linestyle="--", linewidth=0.8)
+            ax.set_xlabel("Coefficient Value")
             ax.set_title(f"Model Coefficients with {hdi_prob:.0%} HDI")
         else:
             # OLS: point estimates
@@ -720,6 +737,11 @@ class PanelRegression(BaseExperiment):
         -------
         tuple[plt.Figure, plt.Axes]
             Figure and axes objects
+
+        Raises
+        ------
+        ValueError
+            If ``var_names`` is empty or ``hdi_prob`` is outside ``(0, 1)``.
         """
         return self._plot_coefficients_internal(var_names=var_names, hdi_prob=hdi_prob)
 
@@ -876,6 +898,9 @@ class PanelRegression(BaseExperiment):
             else:
                 interval_source = mu
 
+        if units is None and n_sample <= 0:
+            raise ValueError("n_sample must be positive when units is not provided")
+
         # Select units to plot
         all_units = self.data[self.unit_fe_variable].unique()
 
@@ -903,6 +928,9 @@ class PanelRegression(BaseExperiment):
                     self.outcome_variable_name
                 ].var()
                 selected_units = unit_var.nlargest(n_sample).index.tolist()
+
+        if len(selected_units) == 0:
+            raise ValueError("plot_trajectories() requires at least one unit")
 
         # Create only the subplots we need
         n_units_plot = len(selected_units)
@@ -963,14 +991,13 @@ class PanelRegression(BaseExperiment):
                     alpha=0.7,
                 )
 
-                # Plot HDI using az.plot_hdi
-                az.plot_hdi(
+                _plot_interval_band(
                     sorted_time_vals,
                     unit_interval,
-                    hdi_prob=hdi_prob,
-                    ax=ax,
-                    smooth=False,
-                    fill_kwargs={"alpha": 0.2},
+                    ax,
+                    ci_prob=hdi_prob,
+                    ci_kind="hdi",
+                    plot_hdi_kwargs={"fill_kwargs": {"alpha": 0.2}},
                 )
             else:
                 # OLS: get fitted values for this unit
