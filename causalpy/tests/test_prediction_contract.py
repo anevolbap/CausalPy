@@ -102,7 +102,7 @@ def test_linear_regression_mu_matches_outcome_scale_impact(rng, mock_pymc_sample
     pred = model.predict(X, coords)
 
     impact = model.calculate_impact(y, pred)
-    mu = pred.posterior_predictive["mu"]
+    mu = pred["posterior_predictive"]["mu"]
     expected = (y - mu).transpose(..., "obs_ind")
 
     xr.testing.assert_allclose(impact, expected)
@@ -126,7 +126,7 @@ def test_poisson_log_link_mu_is_expected_count(rng, mock_pymc_sample):
     model.fit(X, y, coords)
     pred = model.predict(X, coords)
 
-    mu = pred.posterior_predictive["mu"]
+    mu = pred["posterior_predictive"]["mu"]
     assert float(mu.min()) >= 0.0
     impact = model.calculate_impact(y, pred)
     assert impact.dims[-1] == "obs_ind"
@@ -152,7 +152,7 @@ def test_bernoulli_logit_mu_is_probability(rng, mock_pymc_sample):
     model.fit(X, y, coords)
     pred = model.predict(X, coords)
 
-    mu = pred.posterior_predictive["mu"]
+    mu = pred["posterior_predictive"]["mu"]
     assert float(mu.min()) >= 0.0
     assert float(mu.max()) <= 1.0
     impact = model.calculate_impact(y, pred)
@@ -201,7 +201,64 @@ def test_calculate_impact_uses_mu_not_y_hat(rng, mock_pymc_sample):
     pred = model.predict(X, coords)
 
     impact_from_mu = model.calculate_impact(y, pred)
-    noise_inclusive = y - pred.posterior_predictive["y_hat"]
+    noise_inclusive = y - pred["posterior_predictive"]["y_hat"]
 
     with pytest.raises(AssertionError):
         xr.testing.assert_allclose(impact_from_mu, noise_inclusive)
+
+
+def test_predictive_and_counterfactual_datatree_item_access(rng, mock_pymc_sample):
+    """Impact uses ``pred["posterior_predictive"]["mu"]`` with outcome ``obs_ind`` alignment.
+
+    Predictive and counterfactual ``predict()`` results are DataTrees; callers and
+    ``calculate_impact`` must reach ``mu`` via item access and subtract that exact
+    array after aligning ``obs_ind`` to the observed outcome.
+    """
+    n_obs = 10
+    obs_ind = np.arange(100, 100 + n_obs)
+    X = xr.DataArray(
+        np.column_stack([np.ones(n_obs), rng.normal(size=n_obs)]),
+        dims=["obs_ind", "coeffs"],
+        coords={"obs_ind": obs_ind, "coeffs": ["Intercept", "x1"]},
+    )
+    y = xr.DataArray(
+        (
+            X.data @ np.array([[0.25, 0.75]]).T + rng.normal(scale=0.3, size=(n_obs, 1))
+        ).astype(float),
+        dims=["obs_ind", "treated_units"],
+        coords={"obs_ind": obs_ind, "treated_units": ["unit_0"]},
+    )
+    coords = {
+        "obs_ind": obs_ind,
+        "coeffs": ["Intercept", "x1"],
+        "treated_units": ["unit_0"],
+    }
+
+    model = LinearRegression(sample_kwargs={**sample_kwargs, "random_seed": 17})
+    model.fit(X, y, coords)
+
+    pred = model.predict(X, coords)
+    assert isinstance(pred, xr.DataTree)
+    mu = pred["posterior_predictive"]["mu"]
+    np.testing.assert_array_equal(
+        mu.coords["obs_ind"].values, X.coords["obs_ind"].values
+    )
+    impact = model.calculate_impact(y, pred)
+    mu_aligned = mu.assign_coords(obs_ind=y["obs_ind"])
+    xr.testing.assert_allclose(impact, (y - mu_aligned).transpose(..., "obs_ind"))
+    np.testing.assert_array_equal(impact["obs_ind"].values, y["obs_ind"].values)
+
+    # Counterfactual-style predict on a modified design matrix (same obs_ind).
+    X_cf = X.copy(deep=True)
+    X_cf.loc[:, "x1"] = 0.0
+    cf_pred = model.predict(X_cf, coords)
+    assert isinstance(cf_pred, xr.DataTree)
+    cf_mu = cf_pred["posterior_predictive"]["mu"]
+    np.testing.assert_array_equal(
+        cf_mu.coords["obs_ind"].values, X_cf.coords["obs_ind"].values
+    )
+    cf_impact = model.calculate_impact(y, cf_pred)
+    cf_mu_aligned = cf_mu.assign_coords(obs_ind=y["obs_ind"])
+    xr.testing.assert_allclose(cf_impact, (y - cf_mu_aligned).transpose(..., "obs_ind"))
+    np.testing.assert_array_equal(cf_impact["obs_ind"].values, y["obs_ind"].values)
+    assert not np.allclose(mu.values, cf_mu.values)

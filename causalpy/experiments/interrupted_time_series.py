@@ -361,22 +361,23 @@ class InterruptedTimeSeries(BaseExperiment):
 
             # 3. Split post_pred into intervention_pred and post_intervention_pred
             # These are slices of post_pred, not new computations
-            # For PyMC models, post_pred is guaranteed to be az.InferenceData
-            # (regular PyMC models return it directly, BSTS-like models are wrapped in __init__)
-            intervention_pred_dataset = self.post_pred.posterior_predictive.sel(
+            # For PyMC models, post_pred is guaranteed to be a DataTree
+            # (regular PyMC models return it directly, BSTS-like models are wrapped in __init__).
+            posterior_predictive = self.post_pred["posterior_predictive"].to_dataset()
+            intervention_pred_dataset = posterior_predictive.sel(
                 {time_dim: intervention_coords}
             )
-            post_intervention_pred_dataset = self.post_pred.posterior_predictive.sel(
+            post_intervention_pred_dataset = posterior_predictive.sel(
                 {time_dim: post_intervention_coords}
             )
 
-            # Create new InferenceData objects with the sliced posterior_predictive
-            # This maintains the same structure as post_pred
-            self.intervention_pred = az.InferenceData(
-                posterior_predictive=intervention_pred_dataset
+            # Create DataTrees with the sliced posterior_predictive dataset.
+            # This maintains the same structure as post_pred.
+            self.intervention_pred = xr.DataTree.from_dict(
+                {"posterior_predictive": intervention_pred_dataset}
             )
-            self.post_intervention_pred = az.InferenceData(
-                posterior_predictive=post_intervention_pred_dataset
+            self.post_intervention_pred = xr.DataTree.from_dict(
+                {"posterior_predictive": post_intervention_pred_dataset}
             )
 
             # 4. Split post_impact into intervention_impact and post_intervention_impact

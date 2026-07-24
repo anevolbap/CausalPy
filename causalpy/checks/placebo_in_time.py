@@ -603,7 +603,7 @@ class PlaceboInTime:
 
         Returns
         -------
-        tuple[InferenceData, np.ndarray]
+        tuple[DataTree, np.ndarray]
             ``(idata, theta_new_samples)`` where ``theta_new_samples``
             are draws from the posterior predictive for a new null
             period.

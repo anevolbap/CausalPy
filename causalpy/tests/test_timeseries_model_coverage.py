@@ -224,6 +224,71 @@ class TestBayesianBasisExpansionTimeSeriesCoverage:
             model.predict(X_empty)
 
 
+class TestBayesianBasisExpansionTimeSeriesDataTree:
+    """DataTree migration contracts for BayesianBasisExpansionTimeSeries.
+
+    Uses MockComponent so these tests do not depend on pymc-marketing default
+    components (which may be unavailable or incompatible in the pymc 6 env).
+    """
+
+    @pytest.fixture
+    def sample_data(self):
+        """Create sample time series data."""
+        dates = pd.date_range(start="2020-01-01", end="2020-03-01", freq="D")
+        n_obs = len(dates)
+        y_values = np.random.default_rng(0).normal(size=n_obs)
+
+        X_da = xr.DataArray(
+            np.zeros((n_obs, 0)),
+            dims=["obs_ind", "coeffs"],
+            coords={"obs_ind": dates, "coeffs": []},
+        )
+        y_da = xr.DataArray(
+            y_values.reshape(-1, 1),
+            dims=["obs_ind", "treated_units"],
+            coords={"obs_ind": dates, "treated_units": ["unit_0"]},
+        )
+        return X_da, y_da
+
+    def test_fit_returns_datatree_with_expected_groups(
+        self, sample_data, mock_pymc_sample
+    ):
+        """fit() returns a DataTree with posterior / prior / predictive groups."""
+        X_da, y_da = sample_data
+        model = cp.pymc_models.BayesianBasisExpansionTimeSeries(
+            trend_component=MockComponent(),
+            seasonality_component=MockComponent(),
+            sample_kwargs={"draws": 10, "tune": 10, "chains": 1, "progressbar": False},
+        )
+
+        idata = model.fit(X_da, y_da)
+
+        assert isinstance(idata, xr.DataTree)
+        assert "posterior" in idata
+        assert "prior_predictive" in idata
+        assert "posterior_predictive" in idata
+
+    def test_predict_preserves_datetime_obs_ind(self, sample_data, mock_pymc_sample):
+        """predict() keeps the exact datetime obs_ind coordinates from X."""
+        X_da, y_da = sample_data
+        model = cp.pymc_models.BayesianBasisExpansionTimeSeries(
+            trend_component=MockComponent(),
+            seasonality_component=MockComponent(),
+            sample_kwargs={"draws": 10, "tune": 10, "chains": 1, "progressbar": False},
+        )
+        model.fit(X_da, y_da)
+
+        pred = model.predict(X_da)
+
+        assert isinstance(pred, xr.DataTree)
+        assert "posterior_predictive" in pred
+        obs_ind = pred["posterior_predictive"]["mu"].coords["obs_ind"]
+        np.testing.assert_array_equal(
+            obs_ind.values.astype("datetime64[ns]"),
+            X_da.coords["obs_ind"].values.astype("datetime64[ns]"),
+        )
+
+
 class TestStateSpaceTimeSeriesCoverage:
     """Test uncovered branches in StateSpaceTimeSeries."""
 
@@ -232,7 +297,7 @@ class TestStateSpaceTimeSeriesCoverage:
         """Create sample time series data."""
         dates = pd.date_range(start="2020-01-01", end="2020-02-01", freq="D")
         n_obs = len(dates)
-        y_values = np.random.randn(n_obs) + 10
+        y_values = np.random.default_rng(0).normal(size=n_obs) + 10
 
         y_da = xr.DataArray(
             y_values.reshape(-1, 1),
@@ -357,6 +422,82 @@ class TestStateSpaceTimeSeriesCoverage:
         with pytest.raises(ValueError, match="y must have at least one observation"):
             model.build_model(y=y_bad)
 
+    def test_build_model_rejects_multiple_treated_units(self, sample_data):
+        """State-space models reject unsupported multi-unit outcomes."""
+        y_multi = xr.DataArray(
+            np.repeat(sample_data.values, 2, axis=1),
+            dims=["obs_ind", "treated_units"],
+            coords={
+                "obs_ind": sample_data.coords["obs_ind"],
+                "treated_units": ["first", "second"],
+            },
+        )
+        model = cp.pymc_models.StateSpaceTimeSeries(
+            sample_kwargs={"draws": 10, "tune": 10, "progressbar": False}
+        )
+
+        with pytest.raises(ValueError, match="supports exactly one treated unit, got 2"):
+            model.build_model(y=y_multi)
+
+    def test_build_model_rejects_empty_treated_units(self, sample_data):
+        """State-space models reject empty treated-unit dimensions clearly."""
+        y_empty = xr.DataArray(
+            np.empty((sample_data.sizes["obs_ind"], 0)),
+            dims=["obs_ind", "treated_units"],
+            coords={
+                "obs_ind": sample_data.coords["obs_ind"],
+                "treated_units": [],
+            },
+        )
+        model = cp.pymc_models.StateSpaceTimeSeries(
+            sample_kwargs={"draws": 10, "tune": 10, "progressbar": False}
+        )
+
+        with pytest.raises(ValueError, match="supports exactly one treated unit, got 0"):
+            model.build_model(y=y_empty)
+
+    def test_build_model_requires_treated_units_dimension(self, sample_data):
+        """State-space models reject 1D outcomes before score can fail."""
+        y_1d = xr.DataArray(
+            sample_data.values[:, 0],
+            dims=["obs_ind"],
+            coords={"obs_ind": sample_data.coords["obs_ind"]},
+        )
+        model = cp.pymc_models.StateSpaceTimeSeries(
+            sample_kwargs={"draws": 10, "tune": 10, "progressbar": False}
+        )
+
+        with pytest.raises(ValueError, match="requires a treated_units dimension"):
+            model.build_model(y=y_1d)
+
+    def test_fit_and_score_support_unlabeled_single_treated_unit(
+        self, sample_data, mock_pymc_sample
+    ):
+        """A singleton treated-unit dimension uses its xarray index label."""
+        y_unlabeled = xr.DataArray(
+            sample_data.values,
+            dims=["obs_ind", "treated_units"],
+            coords={"obs_ind": sample_data.coords["obs_ind"]},
+        )
+        X = xr.DataArray(
+            np.zeros((y_unlabeled.sizes["obs_ind"], 0)),
+            dims=["obs_ind", "coeffs"],
+            coords={"obs_ind": y_unlabeled.coords["obs_ind"], "coeffs": []},
+        )
+        model = cp.pymc_models.StateSpaceTimeSeries(
+            level_order=1,
+            seasonal_length=7,
+            sample_kwargs={"draws": 10, "tune": 10, "chains": 1, "progressbar": False},
+        )
+
+        prediction = model.fit(X=X, y=y_unlabeled)
+        score = model.score(X=X, y=y_unlabeled)
+
+        assert prediction["posterior_predictive"]["y_hat"].coords[
+            "treated_units"
+        ].values.tolist() == [0]
+        assert "unit_0_r2" in score
+
     def test_fit_y_none(self):
         """Test error when y is None in fit."""
         model = cp.pymc_models.StateSpaceTimeSeries(
@@ -368,6 +509,101 @@ class TestStateSpaceTimeSeriesCoverage:
             match="y must be provided for StateSpaceTimeSeries.fit",
         ):
             model.fit(y=None)
+
+    def test_fit_predict_datatree_uses_obs_ind_not_time(
+        self, sample_data, mock_pymc_sample
+    ):
+        """fit/predict return DataTree with y_hat/mu on obs_ind (not time).
+
+        Also checks OOS predict preserves the exact supplied datetime obs_ind.
+        """
+        y_da = sample_data.assign_coords(treated_units=["treated"])
+        dates = y_da.coords["obs_ind"].values
+        dummy_X = xr.DataArray(
+            np.zeros((len(dates), 0)),
+            dims=["obs_ind", "coeffs"],
+            coords={"obs_ind": dates, "coeffs": []},
+        )
+        model = cp.pymc_models.StateSpaceTimeSeries(
+            level_order=1,
+            seasonal_length=7,
+            sample_kwargs={"draws": 10, "tune": 10, "chains": 1, "progressbar": False},
+        )
+
+        idata = model.fit(X=dummy_X, y=y_da)
+        assert isinstance(idata, xr.DataTree)
+        assert "posterior_predictive" in idata
+        assert model.idata is idata
+        fitted_pp = model.idata["posterior_predictive"]
+        assert "y_hat" in fitted_pp and "mu" in fitted_pp
+        assert set(fitted_pp.to_dataset().data_vars) == {"y_hat", "mu"}
+        assert "obs_ind" in fitted_pp["y_hat"].dims
+        np.testing.assert_array_equal(
+            fitted_pp["y_hat"].coords["treated_units"].values,
+            y_da.coords["treated_units"].values,
+        )
+        assert fitted_pp["y_hat"].dims == (
+            "chain",
+            "draw",
+            "obs_ind",
+            "treated_units",
+        )
+        np.testing.assert_array_equal(
+            fitted_pp["y_hat"].coords["obs_ind"].values, dates
+        )
+
+        in_sample = model.predict(X=dummy_X, out_of_sample=False)
+        assert isinstance(in_sample, xr.DataTree)
+        in_pp = in_sample["posterior_predictive"]
+        assert "y_hat" in in_pp and "mu" in in_pp
+        assert set(in_pp.to_dataset().data_vars) == {"y_hat", "mu"}
+        assert "obs_ind" in in_pp["y_hat"].dims
+        assert "time" not in in_pp["y_hat"].dims
+        assert "obs_ind" in in_pp["mu"].dims
+        assert "time" not in in_pp["mu"].dims
+        np.testing.assert_array_equal(
+            in_pp["y_hat"].coords["treated_units"].values,
+            y_da.coords["treated_units"].values,
+        )
+        assert in_pp["y_hat"].dims == (
+            "chain",
+            "draw",
+            "obs_ind",
+            "treated_units",
+        )
+        np.testing.assert_array_equal(in_pp["y_hat"].coords["obs_ind"].values, dates)
+
+        oos_dates = pd.date_range(
+            start=pd.Timestamp(dates[-1]) + pd.Timedelta(days=1),
+            periods=5,
+            freq="D",
+        )
+        X_oos = xr.DataArray(
+            np.zeros((len(oos_dates), 0)),
+            dims=["obs_ind", "coeffs"],
+            coords={"obs_ind": oos_dates, "coeffs": []},
+        )
+        oos = model.predict(X=X_oos, out_of_sample=True)
+        assert isinstance(oos, xr.DataTree)
+        oos_pp = oos["posterior_predictive"]
+        assert "y_hat" in oos_pp and "mu" in oos_pp
+        assert set(oos_pp.to_dataset().data_vars) == {"y_hat", "mu"}
+        assert "obs_ind" in oos_pp["y_hat"].dims
+        assert "time" not in oos_pp["y_hat"].dims
+        np.testing.assert_array_equal(
+            oos_pp["y_hat"].coords["obs_ind"].values.astype("datetime64[ns]"),
+            oos_dates.values.astype("datetime64[ns]"),
+        )
+        np.testing.assert_array_equal(
+            oos_pp["y_hat"].coords["treated_units"].values,
+            y_da.coords["treated_units"].values,
+        )
+        assert oos_pp["y_hat"].dims == (
+            "chain",
+            "draw",
+            "obs_ind",
+            "treated_units",
+        )
 
     def test_predict_out_of_sample_x_none(self, sample_data):
         """Test error when X is None for out-of-sample predictions."""

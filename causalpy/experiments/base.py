@@ -227,8 +227,8 @@ class BaseExperiment(ABC):
         raise NotImplementedError("fit method not implemented")
 
     @property
-    def idata(self) -> az.InferenceData:
-        """Return the InferenceData object of the model. Only relevant for PyMC models."""
+    def idata(self) -> xr.DataTree:
+        """Return the model's DataTree. Only relevant for PyMC models."""
         return self._model_backend.idata
 
     def print_coefficients(self, round_to: int | None = None) -> None:

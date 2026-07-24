@@ -68,6 +68,23 @@ def _call_seasonality_component_apply(
     """Call seasonality components across tensor and xtensor variants."""
     return _call_time_component_apply(seasonality_component, dayofperiod)
 
+def _extend_datatree_left(idata: xr.DataTree, other: xr.DataTree) -> xr.DataTree:
+    """Add DataTree groups without replacing groups already in ``idata``."""
+    for group, node in other.children.items():
+        if group not in idata:
+            idata[group] = node
+    return idata
+
+
+def _assign_group_coords(
+    idata: xr.DataTree, group: str, **coords: Any
+) -> xr.DataTree:
+    """Assign coordinates to a DataTree group through its Dataset."""
+    idata[group] = idata[group].to_dataset().assign_coords(**coords)
+    return idata
+
+
+
 
 class PyMCModel(pm.Model):
     """A wrapper class for PyMC models. This provides a scikit-learn like interface with
@@ -312,11 +329,11 @@ class PyMCModel(pm.Model):
         obs_coords = np.arange(new_no_of_observations)
 
         with self:
-            # Get the number of treated units from the model coordinates
-            treated_units_coord = getattr(self, "coords", {}).get(
-                "treated_units", ["unit_0"]
-            )
-            n_treated_units = len(treated_units_coord)
+            treated_units_coord = getattr(self, "coords", {}).get("treated_units")
+            if treated_units_coord is None:
+                n_treated_units = getattr(self, "_n_treated_units", 1)
+            else:
+                n_treated_units = len(treated_units_coord)
 
             pm.set_data(
                 {"X": X, "y": np.zeros((new_no_of_observations, n_treated_units))},
@@ -325,7 +342,7 @@ class PyMCModel(pm.Model):
 
     def fit(
         self, X: xr.DataArray, y: xr.DataArray, coords: dict[str, Any] | None = None
-    ) -> az.InferenceData:
+    ) -> xr.DataTree:
         """Draw samples from posterior, prior predictive, and posterior
         predictive distributions.
 
@@ -341,9 +358,14 @@ class PyMCModel(pm.Model):
 
         Returns
         -------
-        az.InferenceData
-            InferenceData object containing the samples.
+        xr.DataTree
+            DataTree containing the samples.
         """
+
+        coords = {} if coords is None else coords.copy()
+        for data in (X, y):
+            for dimension in data.dims:
+                coords.setdefault(dimension, data.get_index(dimension))
 
         # Ensure random_seed is used in sample_prior_predictive() and
         # sample_posterior_predictive() if provided in sample_kwargs.
@@ -353,16 +375,20 @@ class PyMCModel(pm.Model):
         # Data-driven priors are computed first, then user-specified priors override them
         self.priors = {**self.priors_from_data(X, y), **self.priors}
 
+        self._n_treated_units = y.sizes.get("treated_units", 1)
         self.build_model(X, y, coords)
         with self:
             self.idata = pm.sample(**self.sample_kwargs)
             if self.idata is None:
                 raise RuntimeError("pm.sample() returned None")
-            self.idata.extend(pm.sample_prior_predictive(random_seed=random_seed))
-            self.idata.extend(
-                pm.sample_posterior_predictive(
-                    self.idata, progressbar=False, random_seed=random_seed
-                )
+            self.idata = _extend_datatree_left(
+                self.idata, pm.sample_prior_predictive(random_seed=random_seed)
+            )
+            pm.sample_posterior_predictive(
+                self.idata,
+                progressbar=False,
+                random_seed=random_seed,
+                extend_inferencedata=True,
             )
         return self.idata
 
@@ -412,9 +438,7 @@ class PyMCModel(pm.Model):
         # to preserve the original coordinates (e.g., datetime indices) for proper
         # alignment with other xarray operations like calculate_impact()
         if isinstance(X, xr.DataArray) and "obs_ind" in X.coords:
-            pp["posterior_predictive"] = pp["posterior_predictive"].assign_coords(
-                obs_ind=X.obs_ind
-            )
+            _assign_group_coords(pp, "posterior_predictive", obs_ind=X.obs_ind)
 
         return pp
 
@@ -457,7 +481,7 @@ class PyMCModel(pm.Model):
         return pd.Series(scores)
 
     def calculate_impact(
-        self, y_true: xr.DataArray, y_pred: az.InferenceData
+        self, y_true: xr.DataArray, y_pred: xr.DataTree
     ) -> xr.DataArray:
         """
         Calculate the causal impact as the difference between observed and predicted values.
@@ -473,7 +497,7 @@ class PyMCModel(pm.Model):
         ----------
         y_true : xr.DataArray
             The observed outcome values with dimensions ["obs_ind", "treated_units"].
-        y_pred : az.InferenceData
+        y_pred : xr.DataTree
             The posterior predictive samples containing the "mu" variable, which
             represents the expected value (mean) of the outcome.
 
@@ -1370,21 +1394,21 @@ class InstrumentalVariableRegression(PyMCModel):
         if ppc_sampler == "jax":
             if self.idata is not None:
                 with self:
-                    self.idata.extend(
-                        pm.sample_posterior_predictive(
-                            self.idata,
-                            random_seed=random_seed,
-                            compile_kwargs={"mode": "JAX"},
-                        )
-                    )
-        elif ppc_sampler == "pymc" and self.idata is not None:
-            with self:
-                self.idata.extend(pm.sample_prior_predictive(random_seed=random_seed))
-                self.idata.extend(
                     pm.sample_posterior_predictive(
                         self.idata,
                         random_seed=random_seed,
+                        compile_kwargs={"mode": "JAX"},
+                        extend_inferencedata=True,
                     )
+        elif ppc_sampler == "pymc" and self.idata is not None:
+            with self:
+                self.idata = _extend_datatree_left(
+                    self.idata, pm.sample_prior_predictive(random_seed=random_seed)
+                )
+                pm.sample_posterior_predictive(
+                    self.idata,
+                    random_seed=random_seed,
+                    extend_inferencedata=True,
                 )
 
     def fit(  # type: ignore[override]
@@ -1399,7 +1423,7 @@ class InstrumentalVariableRegression(PyMCModel):
         vs_prior_type: Literal["spike_and_slab", "horseshoe", "normal"] | None = None,
         vs_hyperparams: dict[str, Any] | None = None,
         binary_treatment: bool = False,
-    ) -> az.InferenceData:  # type: ignore[override]
+    ) -> xr.DataTree:
         """Draw samples from posterior distribution and potentially
         from the prior and posterior predictive distributions. The
         fit call can take values for the
@@ -1524,7 +1548,7 @@ class PropensityScore(PyMCModel):
         coords: dict[str, Any],
         prior: dict[str, list] | None = None,
         noncentred: bool = True,
-    ) -> az.InferenceData:
+    ) -> xr.DataTree:
         """Draw samples from posterior, prior predictive, and posterior predictive
         distributions. We overwrite the base method because the base method assumes
         a variable y and we use t to indicate the treatment variable here.
@@ -1552,11 +1576,14 @@ class PropensityScore(PyMCModel):
         with self:
             self.idata = pm.sample(**self.sample_kwargs)
             if self.idata is not None:
-                self.idata.extend(pm.sample_prior_predictive(random_seed=random_seed))
-                self.idata.extend(
-                    pm.sample_posterior_predictive(
-                        self.idata, progressbar=False, random_seed=random_seed
-                    )
+                self.idata = _extend_datatree_left(
+                    self.idata, pm.sample_prior_predictive(random_seed=random_seed)
+                )
+                pm.sample_posterior_predictive(
+                    self.idata,
+                    progressbar=False,
+                    random_seed=random_seed,
+                    extend_inferencedata=True,
                 )
         return self.idata
 
@@ -1571,7 +1598,7 @@ class PropensityScore(PyMCModel):
         spline_component: bool = False,
         winsorize_boundary: float = 0.0,
         spline_knots: int = 30,
-    ) -> tuple[az.InferenceData, pm.Model]:
+    ) -> tuple[xr.DataTree, pm.Model]:
         """
         Fit a Bayesian outcome model using covariates and previously estimated propensity scores.
 
@@ -1617,7 +1644,7 @@ class PropensityScore(PyMCModel):
 
         Returns
         -------
-        idata_outcome : arviz.InferenceData
+        idata_outcome : xr.DataTree
             The posterior and prior predictive samples from the outcome model.
 
         model_outcome : pm.Model
@@ -1709,7 +1736,7 @@ class PropensityScore(PyMCModel):
                 )
 
             idata_outcome = pm.sample_prior_predictive(random_seed=random_seed)
-            idata_outcome.extend(pm.sample(**self.sample_kwargs))
+            idata_outcome.update(pm.sample(**self.sample_kwargs))
 
         return idata_outcome, model_outcome
 
@@ -2059,7 +2086,7 @@ class BayesianBasisExpansionTimeSeries(PyMCModel):
 
     def fit(
         self, X: xr.DataArray, y: xr.DataArray, coords: dict[str, Any] | None = None
-    ) -> az.InferenceData:
+    ) -> xr.DataTree:
         """Draw samples from posterior, prior predictive, and posterior predictive
         distributions, placing them in the model's idata attribute.
 
@@ -2078,14 +2105,15 @@ class BayesianBasisExpansionTimeSeries(PyMCModel):
         with self:
             self.idata = pm.sample(**self.sample_kwargs)
             if self.idata is not None:
-                self.idata.extend(pm.sample_prior_predictive(random_seed=random_seed))
-                self.idata.extend(
-                    pm.sample_posterior_predictive(
-                        self.idata,
-                        var_names=["y_hat", "mu"],
-                        progressbar=self.sample_kwargs.get("progressbar", True),
-                        random_seed=random_seed,
-                    )
+                self.idata = _extend_datatree_left(
+                    self.idata, pm.sample_prior_predictive(random_seed=random_seed)
+                )
+                pm.sample_posterior_predictive(
+                    self.idata,
+                    var_names=["y_hat", "mu"],
+                    progressbar=self.sample_kwargs.get("progressbar", True),
+                    random_seed=random_seed,
+                    extend_inferencedata=True,
                 )
         return self.idata  # type: ignore[return-value]
 
@@ -2158,7 +2186,7 @@ class BayesianBasisExpansionTimeSeries(PyMCModel):
         coords: dict[str, Any] | None = None,
         out_of_sample: bool | None = False,
         **kwargs: Any,
-    ) -> az.InferenceData:
+    ) -> xr.DataTree:
         """
         Predict data given input X.
 
@@ -2177,7 +2205,7 @@ class BayesianBasisExpansionTimeSeries(PyMCModel):
 
         Returns
         -------
-        az.InferenceData
+        xr.DataTree
             Posterior predictive samples.
         """
         random_seed = self.sample_kwargs.get("random_seed", None)
@@ -2192,9 +2220,7 @@ class BayesianBasisExpansionTimeSeries(PyMCModel):
 
         # Assign coordinates from input X for proper alignment
         if isinstance(X, xr.DataArray) and "obs_ind" in X.coords:
-            post_pred["posterior_predictive"] = post_pred[
-                "posterior_predictive"
-            ].assign_coords(obs_ind=X.obs_ind)
+            _assign_group_coords(post_pred, "posterior_predictive", obs_ind=X.obs_ind)
 
         return post_pred
 
@@ -2275,6 +2301,7 @@ class StateSpaceTimeSeries(PyMCModel):
         self.level_order = level_order
         self.seasonal_length = seasonal_length
         self.mode = mode
+        self._treated_units = ["unit_0"]
         self.ss_mod: Any = None
         self.second_model: pm.Model | None = None  # Created in build_model()
         self._validate_and_initialize_components()
@@ -2379,6 +2406,19 @@ class StateSpaceTimeSeries(PyMCModel):
                 "y must be provided for StateSpaceTimeSeries.build_model()"
             )
 
+        if "treated_units" not in y.dims:
+            raise ValueError(
+                "StateSpaceTimeSeries requires a treated_units dimension with exactly "
+                "one unit."
+            )
+        n_treated_units = y.sizes["treated_units"]
+        if n_treated_units != 1:
+            raise ValueError(
+                "StateSpaceTimeSeries supports exactly one treated unit, got "
+                f"{n_treated_units}."
+            )
+        self._treated_units = list(y.get_index("treated_units"))
+
         # Extract datetime index from y coordinates
         if "obs_ind" not in y.coords:
             raise ValueError("y must have 'obs_ind' coordinate.")
@@ -2462,7 +2502,7 @@ class StateSpaceTimeSeries(PyMCModel):
         X: xr.DataArray | None = None,
         y: xr.DataArray | None = None,
         coords: dict[str, Any] | None = None,
-    ) -> az.InferenceData:
+    ) -> xr.DataTree:
         """
         Fit the model, drawing posterior samples.
 
@@ -2479,8 +2519,8 @@ class StateSpaceTimeSeries(PyMCModel):
 
         Returns
         -------
-        az.InferenceData
-            InferenceData with parameter draws.
+        xr.DataTree
+            DataTree with parameter draws.
         """
         if y is None:
             raise ValueError("y must be provided for StateSpaceTimeSeries.fit()")
@@ -2490,16 +2530,15 @@ class StateSpaceTimeSeries(PyMCModel):
         with self.second_model:
             self.idata = pm.sample(**self.sample_kwargs)
             if self.idata is not None:
-                self.idata.extend(
-                    pm.sample_posterior_predictive(
-                        self.idata,
-                    )
+                pm.sample_posterior_predictive(
+                    self.idata,
+                    extend_inferencedata=True,
                 )
         self.conditional_idata = self._smooth()
         return self._prepare_idata()
 
-    def _prepare_idata(self) -> az.InferenceData:
-        """Prepare InferenceData with proper dimensions including treated_units."""
+    def _prepare_idata(self) -> xr.DataTree:
+        """Prepare DataTree with proper dimensions including treated_units."""
         if self.idata is None:
             raise RuntimeError("Model must be fit before smoothing.")
 
@@ -2517,12 +2556,16 @@ class StateSpaceTimeSeries(PyMCModel):
             y_hat_final = y_hat_summed
 
         # Add treated_units dimension for consistency with other models
-        y_hat_with_units = y_hat_final.expand_dims({"treated_units": ["unit_0"]})
+        y_hat_with_units = y_hat_final.expand_dims(
+            {"treated_units": self._treated_units}
+        ).transpose("chain", "draw", "obs_ind", "treated_units")
 
-        new_idata["posterior_predictive"]["y_hat"] = y_hat_with_units
-        new_idata["posterior_predictive"]["mu"] = y_hat_with_units
+        new_idata["posterior_predictive"] = xr.Dataset(
+            {"y_hat": y_hat_with_units, "mu": y_hat_with_units}
+        )
 
-        return new_idata
+        self.idata = new_idata
+        return self.idata
 
     def _smooth(self) -> xr.Dataset:
         """
@@ -2531,7 +2574,12 @@ class StateSpaceTimeSeries(PyMCModel):
         """
         if self.idata is None:
             raise RuntimeError("Model must be fit before smoothing.")
-        return self.ss_mod.sample_conditional_posterior(self.idata)
+        conditional_idata = self.ss_mod.sample_conditional_posterior(self.idata)
+        return (
+            conditional_idata.to_dataset()
+            if isinstance(conditional_idata, xr.DataTree)
+            else conditional_idata
+        )
 
     def _forecast(self, start: pd.Timestamp, periods: int) -> xr.Dataset:
         """
@@ -2543,7 +2591,8 @@ class StateSpaceTimeSeries(PyMCModel):
             raise RuntimeError("Model must be fit before forecasting.")
         if self.ss_mod is None:
             raise RuntimeError("State space model not initialized")
-        return self.ss_mod.forecast(self.idata, start=start, periods=periods)
+        forecast = self.ss_mod.forecast(self.idata, start=start, periods=periods)
+        return forecast.to_dataset() if isinstance(forecast, xr.DataTree) else forecast
 
     def predict(
         self,
@@ -2551,7 +2600,7 @@ class StateSpaceTimeSeries(PyMCModel):
         coords: dict[str, Any] | None = None,
         out_of_sample: bool | None = False,
         **kwargs: Any,
-    ) -> az.InferenceData:
+    ) -> xr.DataTree:
         """
         Predict data given input X.
 
@@ -2571,7 +2620,7 @@ class StateSpaceTimeSeries(PyMCModel):
 
         Returns
         -------
-        az.InferenceData
+        xr.DataTree
             Posterior predictive samples with y_hat and mu.
         """
         if not out_of_sample:
@@ -2604,20 +2653,21 @@ class StateSpaceTimeSeries(PyMCModel):
 
             # Extract the forecasted observed data and add treated_units dimension
             y_hat = forecast_copy["forecast_observed"].isel(observed_state=0)
-            y_hat_with_units = y_hat.expand_dims({"treated_units": ["unit_0"]})
+            y_hat_with_units = y_hat.expand_dims(
+                {"treated_units": self._treated_units}
+            ).transpose("chain", "draw", "obs_ind", "treated_units")
 
-            # Wrap in InferenceData for consistency
-            result = az.InferenceData(
-                posterior_predictive=xr.Dataset(
-                    {"y_hat": y_hat_with_units, "mu": y_hat_with_units}
-                )
+            result = xr.DataTree.from_dict(
+                {
+                    "posterior_predictive": xr.Dataset(
+                        {"y_hat": y_hat_with_units, "mu": y_hat_with_units}
+                    )
+                }
             )
 
             # Assign coordinates from input X for proper alignment
             if isinstance(X, xr.DataArray) and "obs_ind" in X.coords:
-                result["posterior_predictive"] = result[
-                    "posterior_predictive"
-                ].assign_coords(obs_ind=X.obs_ind)
+                _assign_group_coords(result, "posterior_predictive", obs_ind=X.obs_ind)
 
             return result
 

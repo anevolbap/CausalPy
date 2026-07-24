@@ -460,7 +460,7 @@ class SyntheticDifferenceInDifferences(BaseExperiment):
 
         Sets the following attributes on ``self``:
 
-        - ``pre_pred`` / ``post_pred``: ``az.InferenceData`` objects holding
+        - ``pre_pred`` / ``post_pred``: ``xr.DataTree`` objects holding
           the synthetic-control predictions in a ``posterior_predictive``
           group.
         - ``pre_impact`` / ``post_impact``: ``xr.DataArray`` of observed
@@ -525,10 +525,10 @@ class SyntheticDifferenceInDifferences(BaseExperiment):
         index: pd.Index,
         n_chains: int,
         n_draws: int,
-    ) -> az.InferenceData:
-        """Build an InferenceData-like object with posterior_predictive group.
+    ) -> xr.DataTree:
+        """Build a DataTree with a posterior_predictive group.
 
-        Constructs a minimal InferenceData containing a ``mu`` variable in the
+        Constructs a minimal DataTree containing a ``mu`` variable in the
         ``posterior_predictive`` group, shaped to be compatible with the
         reporting helpers that expect SC-style predictions.
 
@@ -545,8 +545,8 @@ class SyntheticDifferenceInDifferences(BaseExperiment):
 
         Returns
         -------
-        az.InferenceData
-            InferenceData with posterior_predictive group containing ``mu``.
+        xr.DataTree
+            DataTree with posterior_predictive group containing ``mu``.
         """
         # Add a singleton treated_units dim: (chain, draw, T, 1)
         mu_4d = mu_vals[..., np.newaxis]
@@ -562,7 +562,7 @@ class SyntheticDifferenceInDifferences(BaseExperiment):
             },
         )
         ds = xr.Dataset({"mu": mu_da})
-        return az.InferenceData(posterior_predictive=ds)
+        return xr.DataTree.from_dict({"posterior_predictive": ds})
 
     def summary(self, round_to: int | None = None) -> None:
         """Print summary of main results.
