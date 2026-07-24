@@ -419,9 +419,24 @@ def get_hdi_to_df(
     # Drop non-dimension coordinates (e.g. scalar treated_units) so they do not
     # become DataFrame columns after unstack — regression for #532.
     hdi_result = hdi_result.reset_coords(drop=True)
+    if hdi_result.dims == ("hdi",):
+        return pd.DataFrame(
+            [hdi_result.sel(hdi=["lower", "higher"]).values],
+            columns=["lower", "higher"],
+        )
+
+    lower = hdi_result.sel(hdi="lower")
+    if any(lower.sizes[dim] == 0 for dim in lower.dims):
+        return pd.DataFrame(
+            index=lower.to_dataframe(name="lower").index,
+            columns=["lower", "higher"],
+            dtype=float,
+        )
+
     hdi_df = hdi_result.to_dataframe(name="hdi_value")[["hdi_value"]].unstack(
         level="hdi"
     )
     hdi_df.columns = hdi_df.columns.droplevel(0)
+    hdi_df.columns.name = None
     # Force deterministic column order for SC iloc[:, [0, -1]] consumers
     return hdi_df[["lower", "higher"]]

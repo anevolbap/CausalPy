@@ -584,7 +584,9 @@ class SyntheticDifferenceInDifferences(BaseExperiment):
             print(f"Treated unit: {self.treated_units[0]}")
 
         tau_mean = float(self.tau_posterior.mean())
-        tau_lower, tau_upper = hdi_bounds(self.tau_posterior.values, prob=HDI_PROB)
+        tau_lower, tau_upper = hdi_bounds(
+            self.tau_posterior.values, prob=HDI_PROB, flatten_chains_draws=True
+        )
         print(
             f"Average treatment effect on the treated (ATT): "
             f"{round(tau_mean, round_to)}"

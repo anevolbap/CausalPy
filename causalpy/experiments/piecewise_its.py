@@ -775,6 +775,15 @@ class PiecewiseITS(BaseExperiment):
         if "treated_units" in y_cf_mu.dims:
             y_cf_mu = y_cf_mu.isel(treated_units=0)
 
+        # Select/drop treated_units so HDI helpers see exactly one preserved
+        # dimension (obs_ind) after chain/draw reduction.
+        effect = self.effect
+        if "treated_units" in effect.dims:
+            effect = effect.isel(treated_units=0)
+        cumulative_effect = self.cumulative_effect
+        if "treated_units" in cumulative_effect.dims:
+            cumulative_effect = cumulative_effect.isel(treated_units=0)
+
         # Compute means and HDIs
         fitted_mean = y_pred_mu.mean(dim=["chain", "draw"]).values
         fitted_lower, fitted_upper = hdi_bound_arrays(y_pred_mu, prob=hdi_prob)
@@ -782,12 +791,12 @@ class PiecewiseITS(BaseExperiment):
         cf_mean = y_cf_mu.mean(dim=["chain", "draw"]).values
         cf_lower, cf_upper = hdi_bound_arrays(y_cf_mu, prob=hdi_prob)
 
-        effect_mean = self.effect.mean(dim=["chain", "draw"]).values
-        effect_lower, effect_upper = hdi_bound_arrays(self.effect, prob=hdi_prob)
+        effect_mean = effect.mean(dim=["chain", "draw"]).values
+        effect_lower, effect_upper = hdi_bound_arrays(effect, prob=hdi_prob)
 
-        cum_effect_mean = self.cumulative_effect.mean(dim=["chain", "draw"]).values
+        cum_effect_mean = cumulative_effect.mean(dim=["chain", "draw"]).values
         cum_effect_lower, cum_effect_upper = hdi_bound_arrays(
-            self.cumulative_effect, prob=hdi_prob
+            cumulative_effect, prob=hdi_prob
         )
 
         # Build DataFrame

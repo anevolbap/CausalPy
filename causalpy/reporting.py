@@ -31,7 +31,7 @@ import pandas as pd
 import xarray as xr
 from scipy.stats import t
 
-from causalpy._arviz_compat import _normalize_hdi_result, hdi_bounds
+from causalpy._arviz_compat import hdi_bounds
 from causalpy.constants import HDI_PROB
 from causalpy.utils import _as_scalar
 
@@ -57,22 +57,6 @@ class EffectSummary:
 # ==============================================================================
 # Helper functions for common operations
 # ==============================================================================
-
-
-def _extract_hdi_bounds(
-    hdi_result: xr.Dataset | xr.DataArray, hdi_prob: float = 0.95
-) -> tuple[float, float]:
-    """Extract HDI lower and upper bounds from a normalized or legacy HDI result.
-
-    Kept for backward-compatible imports/tests. Prefer
-    :func:`causalpy._arviz_compat.hdi_bounds` for new call sites that still have
-    raw posterior draws.
-    """
-    _ = hdi_prob
-    normalized = _normalize_hdi_result(hdi_result)
-    return _as_scalar(normalized.sel(hdi="lower")), _as_scalar(
-        normalized.sel(hdi="higher")
-    )
 
 
 def _compute_tail_probabilities(
