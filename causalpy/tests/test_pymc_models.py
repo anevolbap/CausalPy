@@ -148,6 +148,14 @@ class TestPyMCModel:
         with pytest.raises(TypeError, match="does not support mapping-valued inputs"):
             PyMCModelAdapter(MyToyModel()).fit(X=data, y=data)
 
+    def test_adapter_rejects_mixed_mapping_and_array_inputs(self) -> None:
+        """The adapter requires predictor and target containers to match."""
+        data = xr.DataArray([1.0], dims=["obs_ind"])
+        with pytest.raises(
+            TypeError, match="either both be mappings or both be arrays"
+        ):
+            PyMCModelAdapter(MyToyModel()).fit(X={"unit": data}, y=data)
+
     @pytest.mark.parametrize(
         argnames="coords",
         argvalues=[None, {"a": 1}],
@@ -1032,6 +1040,18 @@ class TestSyntheticDifferenceInDifferencesWeightFitter:
 
         with pytest.raises(TypeError, match="mapping strings to xarray.DataArray"):
             adapter.fit(X, y, coords=coords)
+
+    def test_direct_fit_rejects_mixed_mapping_and_array_inputs(self, sdid_data):
+        """The direct SDID fit boundary requires matching input containers."""
+        X, y, coords = sdid_data
+        with pytest.raises(
+            TypeError, match="either both be mappings or both be arrays"
+        ):
+            SyntheticDifferenceInDifferencesWeightFitter().fit(
+                X,
+                y["unit"],
+                coords=coords,
+            )
 
     def test_omega_is_simplex(self, sdid_data):
         """Test that omega weights sum to 1."""
