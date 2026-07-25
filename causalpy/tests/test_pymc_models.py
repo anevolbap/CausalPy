@@ -20,6 +20,7 @@ import xarray as xr
 from pymc_extras.prior import Prior
 
 import causalpy as cp
+from causalpy.experiments.model_adapter import PyMCModelAdapter
 from causalpy.pymc_models import (
     LinearRegression,
     PyMCModel,
@@ -110,7 +111,50 @@ class TestPyMCModel:
         with pytest.raises(
             NotImplementedError, match="This method must be implemented by a subclass"
         ):
-            PyMCModel().fit(X=np.ones(2), y=np.ones(3), coords={"a": 1})
+            X = xr.DataArray(
+                np.ones((2, 1)),
+                dims=["obs_ind", "coeffs"],
+                coords={"obs_ind": [0, 1], "coeffs": ["x"]},
+            )
+            y = xr.DataArray(
+                np.ones((2, 1)),
+                dims=["obs_ind", "treated_units"],
+                coords={"obs_ind": [0, 1], "treated_units": ["unit_0"]},
+            )
+            PyMCModel().fit(X=X, y=y, coords={"a": 1})
+
+    @pytest.mark.parametrize(
+        ("X", "y"),
+        [
+            (
+                {"unit": xr.DataArray([1.0], dims=["obs_ind"])},
+                xr.DataArray([1.0], dims=["obs_ind"]),
+            ),
+            (
+                {"unit": np.array([1.0])},
+                {"unit": xr.DataArray([1.0], dims=["obs_ind"])},
+            ),
+        ],
+        ids=["mixed-direct-and-mapping", "mapping-with-non-dataarray-value"],
+    )
+    def test_fit_rejects_mixed_or_malformed_input_shapes(self, X, y) -> None:
+        """Fit rejects non-DataArray pairs before model construction."""
+        with pytest.raises(TypeError, match="both be xarray.DataArray"):
+            MyToyModel().fit(X=X, y=y)
+
+    def test_base_mapping_fit_rejects_unsupported_model(self) -> None:
+        """The mapping fit capability fails clearly on ordinary PyMC models."""
+        data = {"unit": xr.DataArray([1.0], dims=["obs_ind"])}
+        with pytest.raises(TypeError, match="does not support mapping-valued inputs"):
+            PyMCModelAdapter(MyToyModel()).fit(X=data, y=data)
+
+    def test_adapter_rejects_mixed_mapping_and_array_inputs(self) -> None:
+        """The adapter requires predictor and target containers to match."""
+        data = xr.DataArray([1.0], dims=["obs_ind"])
+        with pytest.raises(
+            TypeError, match="either both be mappings or both be arrays"
+        ):
+            PyMCModelAdapter(MyToyModel()).fit(X={"unit": data}, y=data)
 
     @pytest.mark.parametrize(
         argnames="coords",
@@ -967,18 +1011,47 @@ class TestSyntheticDifferenceInDifferencesWeightFitter:
         }
         return X, y, coords
 
-    def test_fitting(self, sdid_data):
-        """Test that the model fits and produces omega and lam posteriors."""
+    def test_fitting_through_adapter_preserves_coordinate_labels(self, sdid_data):
+        """Fitting through the adapter preserves the specialized mapping labels."""
         X, y, coords = sdid_data
-        model = SyntheticDifferenceInDifferencesWeightFitter(
-            sample_kwargs=sample_kwargs
+        adapter = PyMCModelAdapter(
+            SyntheticDifferenceInDifferencesWeightFitter(sample_kwargs=sample_kwargs)
         )
-        result = model.fit(X, y, coords=coords)
+        result = adapter.fit(X, y, coords=coords)
 
         assert isinstance(result, xr.DataTree)
         assert "posterior" in result
         assert "omega" in result.posterior
         assert "lam" in result.posterior
+        np.testing.assert_array_equal(
+            result.posterior["omega"].coords["coeffs"].values,
+            coords["coeffs"],
+        )
+        np.testing.assert_array_equal(
+            result.posterior["lam"].coords["obs_ind"].values,
+            coords["obs_ind"],
+        )
+
+    def test_mapping_fit_rejects_malformed_values(self, sdid_data):
+        """The SDID mapping boundary rejects values without xarray labels."""
+        X, y, coords = sdid_data
+        X = {**X, "unit": np.asarray(X["unit"])}
+        adapter = PyMCModelAdapter(SyntheticDifferenceInDifferencesWeightFitter())
+
+        with pytest.raises(TypeError, match="mapping strings to xarray.DataArray"):
+            adapter.fit(X, y, coords=coords)
+
+    def test_direct_fit_rejects_mixed_mapping_and_array_inputs(self, sdid_data):
+        """The direct SDID fit boundary requires matching input containers."""
+        X, y, coords = sdid_data
+        with pytest.raises(
+            TypeError, match="either both be mappings or both be arrays"
+        ):
+            SyntheticDifferenceInDifferencesWeightFitter().fit(
+                X,
+                y["unit"],
+                coords=coords,
+            )
 
     def test_omega_is_simplex(self, sdid_data):
         """Test that omega weights sum to 1."""
@@ -1065,12 +1138,24 @@ class TestSoftmaxWeightedSumFitterMultiUnit:
         for i, _unit in enumerate(treated_units):
             assert f"unit_{i}_r2" in scores.index
 
-    def test_build_model_raises_without_coeffs_coord(self, synthetic_control_data):
-        """Test that build_model raises ValueError when coords lacks 'coeffs'."""
-        X, y, _coords, _control_units, _treated_units = synthetic_control_data
+    def test_fit_infers_coords_from_labeled_arrays(self, synthetic_control_data):
+        """Fit infers model coordinates from labeled DataArray inputs."""
+        X, y, _coords, control_units, treated_units = synthetic_control_data
         wsf = SoftmaxWeightedSumFitter(sample_kwargs=sample_kwargs)
-        with pytest.raises(ValueError, match="coords must include 'coeffs'"):
-            wsf.fit(X, y, coords={"treated_units": ["unit_0"], "obs_ind": [0]})
+        result = wsf.fit(X, y)
+
+        np.testing.assert_array_equal(
+            result.posterior.coords["coeffs"].values,
+            control_units,
+        )
+        np.testing.assert_array_equal(
+            result.posterior.coords["treated_units"].values,
+            treated_units,
+        )
+        np.testing.assert_array_equal(
+            result.posterior.coords["obs_ind"].values,
+            X.coords["obs_ind"].values,
+        )
 
 
 @pytest.fixture(scope="module")
