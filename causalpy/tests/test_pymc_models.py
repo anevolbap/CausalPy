@@ -1103,12 +1103,24 @@ class TestSoftmaxWeightedSumFitterMultiUnit:
         for i, _unit in enumerate(treated_units):
             assert f"unit_{i}_r2" in scores.index
 
-    def test_build_model_raises_without_coeffs_coord(self, synthetic_control_data):
-        """Test that build_model raises ValueError when coords lacks 'coeffs'."""
-        X, y, _coords, _control_units, _treated_units = synthetic_control_data
+    def test_fit_infers_coords_from_labeled_arrays(self, synthetic_control_data):
+        """Fit infers model coordinates from labeled DataArray inputs."""
+        X, y, _coords, control_units, treated_units = synthetic_control_data
         wsf = SoftmaxWeightedSumFitter(sample_kwargs=sample_kwargs)
-        with pytest.raises(ValueError, match="coords must include 'coeffs'"):
-            wsf.fit(X, y, coords={"treated_units": ["unit_0"], "obs_ind": [0]})
+        result = wsf.fit(X, y)
+
+        np.testing.assert_array_equal(
+            result.posterior.coords["coeffs"].values,
+            control_units,
+        )
+        np.testing.assert_array_equal(
+            result.posterior.coords["treated_units"].values,
+            treated_units,
+        )
+        np.testing.assert_array_equal(
+            result.posterior.coords["obs_ind"].values,
+            X.coords["obs_ind"].values,
+        )
 
 
 @pytest.fixture(scope="module")
