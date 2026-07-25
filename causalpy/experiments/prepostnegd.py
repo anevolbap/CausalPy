@@ -16,7 +16,6 @@
 import warnings
 from typing import Any, Literal
 
-import arviz as az
 import numpy as np
 import pandas as pd
 import seaborn as sns
@@ -30,7 +29,11 @@ from causalpy.custom_exceptions import (
 )
 from causalpy.experiments.model_adapter import build_coords
 from causalpy.formula_utils import build_formula_matrices
-from causalpy.plot_utils import _PosteriorPlotStyle, plot_posterior_over_x
+from causalpy.plot_utils import (
+    _PosteriorPlotStyle,
+    plot_posterior_over_x,
+    plot_scalar_posterior,
+)
 from causalpy.pymc_models import LinearRegression, PyMCModel
 from causalpy.reporting import EffectSummary, _effect_summary_did
 from causalpy.utils import _is_variable_dummy_coded, round_num
@@ -398,12 +401,12 @@ class PrePostNEGD(BaseExperiment):
         )
 
         # Plot estimated caual impact / treatment effect
-        az.plot_posterior(
+        plot_scalar_posterior(
             self.causal_impact,
-            ref_val=0,
             ax=ax[1],
+            ci_prob=ci_prob,
+            ref_val=0,
             round_to=round_to,
-            hdi_prob=ci_prob,
         )
         ax[1].set(title="Estimated treatment effect")
         return fig, ax

@@ -18,7 +18,6 @@ Plotting utility functions.
 import warnings
 from typing import Any, Literal, TypedDict
 
-import arviz as az
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
@@ -28,8 +27,9 @@ from matplotlib.collections import PolyCollection
 from matplotlib.lines import Line2D
 from pandas.api.extensions import ExtensionArray
 
-from causalpy._arviz_compat import hdi
+from causalpy._arviz_compat import hdi, hdi_bound_arrays, hdi_bounds
 from causalpy.constants import HDI_PROB
+from causalpy.utils import round_num
 
 
 class _PosteriorPlotStyle(TypedDict):
@@ -70,8 +70,8 @@ def plot_posterior_over_x(
     ax : plt.Axes
         Matplotlib axes object.
     plot_hdi_kwargs : dict, optional
-        Keyword arguments for line, band, heatmap, or sample styling (passed through
-        to matplotlib / ArviZ helpers depending on ``kind`` and ``ci_kind``).
+        Keyword arguments for local Matplotlib line, band, heatmap, or sample
+        styling. Ribbon bands accept nested ``fill_kwargs``.
     ci_prob : float, optional
         Credible interval width when ``kind="ribbon"``. Defaults to
         :data:`~causalpy.constants.HDI_PROB` (currently 0.94). Ignored for
@@ -147,6 +147,81 @@ def _equal_tailed_interval(
     return lower, upper
 
 
+def _interval_bound_values(
+    x: pd.DatetimeIndex | np.ndarray | pd.Index | pd.Series | ExtensionArray,
+    Y: xr.DataArray,
+    *,
+    ci_prob: float,
+    ci_kind: Literal["hdi", "eti"],
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return validated posterior interval bounds aligned one-to-one with ``x``."""
+    if ci_kind == "hdi":
+        lower, upper = hdi_bound_arrays(
+            Y,
+            prob=ci_prob,
+            dim=["chain", "draw"],
+        )
+    else:
+        lower, upper = _equal_tailed_interval(Y, ci_prob)
+        preserved_dims = list(lower.dims)
+        if len(preserved_dims) != 1:
+            msg = (
+                "Vector ETI bounds require exactly one preserved dimension; "
+                f"got {preserved_dims!r}"
+            )
+            raise ValueError(msg)
+
+    lower_vals = np.asarray(lower, dtype=float).ravel()
+    upper_vals = np.asarray(upper, dtype=float).ravel()
+    n_x = len(np.asarray(x))
+    if lower_vals.size != n_x or upper_vals.size != n_x:
+        msg = (
+            f"{ci_kind.upper()} ribbon: length mismatch between x and interval bounds "
+            f"(x={n_x}, lower={lower_vals.size}, upper={upper_vals.size})."
+        )
+        raise ValueError(msg)
+    return lower_vals, upper_vals
+
+
+def _plot_interval_band(
+    x: pd.DatetimeIndex | np.ndarray | pd.Index | pd.Series | ExtensionArray,
+    Y: xr.DataArray,
+    ax: plt.Axes,
+    *,
+    ci_prob: float,
+    ci_kind: Literal["hdi", "eti"],
+    plot_hdi_kwargs: dict[str, Any],
+    interval_bounds: tuple[np.ndarray, np.ndarray] | None = None,
+) -> PolyCollection:
+    """Draw a validated posterior interval band without a summary line."""
+    if interval_bounds is None:
+        lower_vals, upper_vals = _interval_bound_values(
+            x,
+            Y,
+            ci_prob=ci_prob,
+            ci_kind=ci_kind,
+        )
+    else:
+        lower_vals, upper_vals = interval_bounds
+
+    fill_kwargs = plot_hdi_kwargs.get("fill_kwargs", {})
+    line_color = plot_hdi_kwargs.get("color", "C0")
+    fill_color = fill_kwargs.get("color", line_color)
+    fill_alpha = fill_kwargs.get("alpha", 0.3)
+    return ax.fill_between(
+        x,
+        lower_vals,
+        upper_vals,
+        color=fill_color,
+        alpha=fill_alpha,
+        **{
+            key: value
+            for key, value in fill_kwargs.items()
+            if key not in ["color", "alpha"]
+        },
+    )
+
+
 def _plot_ribbon(
     x: pd.DatetimeIndex | np.ndarray | pd.Index | pd.Series | ExtensionArray,
     Y: xr.DataArray,
@@ -160,12 +235,15 @@ def _plot_ribbon(
     if plot_hdi_kwargs is None:
         plot_hdi_kwargs = {}
 
-    # Separate fill_kwargs for az.plot_hdi, as ax.plot doesn't accept them
     line_kwargs = plot_hdi_kwargs.copy()
-    if "fill_kwargs" in line_kwargs:
-        del line_kwargs["fill_kwargs"]
+    line_kwargs.pop("fill_kwargs", None)
 
-    # Plot mean line
+    interval_bounds = _interval_bound_values(
+        x,
+        Y,
+        ci_prob=ci_prob,
+        ci_kind=ci_kind,
+    )
     (h_line,) = ax.plot(
         x,
         Y.mean(dim=["chain", "draw"]),
@@ -173,63 +251,105 @@ def _plot_ribbon(
         **line_kwargs,
         label=label,
     )
+    band_kwargs = {**plot_hdi_kwargs, "color": h_line.get_color()}
+    h_patch = _plot_interval_band(
+        x,
+        Y,
+        ax,
+        ci_prob=ci_prob,
+        ci_kind=ci_kind,
+        plot_hdi_kwargs=band_kwargs,
+        interval_bounds=interval_bounds,
+    )
+    return h_line, h_patch
 
-    # Plot interval ribbon
-    if ci_kind == "hdi":
-        # Use ArviZ's plot_hdi for HDI
-        ax_hdi = az.plot_hdi(
-            x,
-            Y,
-            hdi_prob=ci_prob,
-            ax=ax,
-            smooth=False,
-            **plot_hdi_kwargs,
+
+def plot_scalar_posterior(
+    draws: xr.DataArray,
+    *,
+    ax: plt.Axes,
+    ci_prob: float = HDI_PROB,
+    ref_val: float | None = 0,
+    round_to: int | None = None,
+) -> plt.Axes:
+    """Draw a scalar posterior density, explicit HDI, and optional reference value.
+
+    Parameters
+    ----------
+    draws : xr.DataArray
+        Scalar posterior draws with ``chain`` and ``draw`` dimensions. Singleton
+        non-sample dimensions are squeezed before plotting.
+    ax : plt.Axes
+        Matplotlib axes to draw on.
+    ci_prob : float, default=HDI_PROB
+        Probability mass of the explicit highest density interval.
+    ref_val : float, optional
+        Reference value shown as a vertical dashed line. Defaults to 0.
+    round_to : int, optional
+        Minimum significant figures used in the summary annotation.
+
+    Returns
+    -------
+    plt.Axes
+        The axes supplied by the caller after drawing.
+
+    Raises
+    ------
+    ValueError
+        If the posterior is non-scalar after squeezing or has no finite draws.
+    """
+    if {"chain", "draw"} - set(draws.dims):
+        msg = "Scalar posterior plotting requires both chain and draw dimensions."
+        raise ValueError(msg)
+    squeeze_dims = [
+        dim
+        for dim in draws.dims
+        if dim not in {"chain", "draw"} and draws.sizes[dim] == 1
+    ]
+    posterior = draws.squeeze(dim=squeeze_dims, drop=True) if squeeze_dims else draws
+    non_sample_dims = [dim for dim in posterior.dims if dim not in {"chain", "draw"}]
+    if non_sample_dims:
+        msg = (
+            "Scalar posterior plotting requires only chain and draw dimensions after "
+            f"squeezing singleton dimensions; got {non_sample_dims!r}."
         )
-    else:  # ci_kind == "eti"
-        lower, upper = _equal_tailed_interval(Y, ci_prob)
-        lower_vals = np.asarray(lower.values, dtype=float).ravel()
-        upper_vals = np.asarray(upper.values, dtype=float).ravel()
-        n_x = len(np.asarray(x))
-        if lower_vals.size != n_x or upper_vals.size != n_x:
-            msg = (
-                "ETI ribbon: length mismatch between x and interval bounds "
-                f"(x={n_x}, lower={lower_vals.size}, upper={upper_vals.size})."
-            )
-            raise ValueError(msg)
+        raise ValueError(msg)
 
-        # Extract fill_kwargs if provided
-        fill_kwargs = plot_hdi_kwargs.get("fill_kwargs", {})
-        line_color = plot_hdi_kwargs.get("color", "C0")
-        fill_color = fill_kwargs.get("color", line_color)
-        fill_alpha = fill_kwargs.get("alpha", 0.3)
+    flat = np.asarray(
+        posterior.stack(sample=("chain", "draw")).values,
+        dtype=float,
+    ).ravel()
+    finite_draws = flat[np.isfinite(flat)]
+    if finite_draws.size == 0:
+        msg = "Scalar posterior plotting requires at least one finite posterior draw."
+        raise ValueError(msg)
 
-        ax.fill_between(
-            x,
-            lower_vals,
-            upper_vals,
-            color=fill_color,
-            alpha=fill_alpha,
-            **{k: v for k, v in fill_kwargs.items() if k not in ["color", "alpha"]},
-        )
-        ax_hdi = ax
-
-    # Return handle to patch. We get a list of the children of the axis. Filter for just
-    # the PolyCollection objects. Take the last one.
-    if ci_kind == "hdi":
-        h_patch = list(
-            filter(lambda x: isinstance(x, PolyCollection), ax_hdi.get_children())
-        )[-1]
-    else:  # ci_kind == "eti"
-        # For ETI, we used fill_between which creates a PolyCollection
-        # Get the last PolyCollection from the axes
-        h_patch = (
-            list(
-                filter(lambda x: isinstance(x, PolyCollection), ax_hdi.get_children())
-            )[-1]
-            if any(isinstance(x, PolyCollection) for x in ax_hdi.get_children())
-            else None
-        )
-    return (h_line, h_patch)
+    lower, upper = hdi_bounds(finite_draws, prob=ci_prob)
+    mean = float(finite_draws.mean())
+    ax.hist(finite_draws, bins="auto", density=True, color="C0", alpha=0.5)
+    ax.plot(
+        [lower, upper],
+        [0, 0],
+        color="C0",
+        linewidth=4,
+        solid_capstyle="butt",
+        label=f"{ci_prob:.0%} HDI",
+    )
+    if ref_val is not None:
+        ax.axvline(ref_val, color="black", linestyle="--", label="Reference value")
+    ax.text(
+        0.98,
+        0.98,
+        (
+            f"Mean: {round_num(mean, round_to)}\n"
+            f"{ci_prob:.0%} HDI "
+            f"[{round_num(lower, round_to)}, {round_num(upper, round_to)}]"
+        ),
+        transform=ax.transAxes,
+        horizontalalignment="right",
+        verticalalignment="top",
+    )
+    return ax
 
 
 def _x_as_numeric_mesh(

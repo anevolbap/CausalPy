@@ -61,8 +61,11 @@ def test_its_with_bsts_model():
     assert isinstance(result, cp.InterruptedTimeSeries)
     assert isinstance(result.idata, xr.DataTree)
 
-    # Plot rendering is covered by the plotting migration tests. Keep this
-    # integration focused on the BSTS result and its downstream data contract.
+    # Plot and plot data
+    fig, ax = result.plot()
+    assert isinstance(fig, plt.Figure)
+    assert isinstance(ax, np.ndarray)
+
     plot_data = result.get_plot_data()
     assert isinstance(plot_data, pd.DataFrame)
     expected_columns = {
