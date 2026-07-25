@@ -15,7 +15,7 @@
 
 import inspect
 import warnings
-from typing import Any, Literal, cast
+from typing import Any, Literal
 
 import arviz as az
 import numpy as np
@@ -339,8 +339,8 @@ class PyMCModel(pm.Model):
 
     def fit(
         self,
-        X: xr.DataArray | dict[str, xr.DataArray],
-        y: xr.DataArray | dict[str, xr.DataArray],
+        X: xr.DataArray,
+        y: xr.DataArray,
         coords: dict[str, Any] | None = None,
     ) -> xr.DataTree:
         """Draw samples from posterior, prior predictive, and posterior
@@ -348,12 +348,10 @@ class PyMCModel(pm.Model):
 
         Parameters
         ----------
-        X : xarray.DataArray or dict of str to xarray.DataArray
-            Input features. Specialized models may consume a dictionary of
-            labeled input arrays.
-        y : xarray.DataArray or dict of str to xarray.DataArray
-            Target values. Specialized models may consume a dictionary of
-            labeled target arrays.
+        X : xarray.DataArray
+            Input features as a labeled array.
+        y : xarray.DataArray
+            Target values as a labeled array.
         coords : dict, optional
             Dictionary with coordinate names for named dimensions.
             Defaults to None.
@@ -364,30 +362,45 @@ class PyMCModel(pm.Model):
             DataTree containing the samples.
         """
 
-        coords = {} if coords is None else coords.copy()
-        if isinstance(X, xr.DataArray) and isinstance(y, xr.DataArray):
-            for data in (X, y):
-                for dimension in data.dims:
-                    coords.setdefault(dimension, data.get_index(dimension))
-            self._n_treated_units = y.sizes.get("treated_units", 1)
-        elif (
-            isinstance(X, dict)
-            and isinstance(y, dict)
-            and X
-            and y
-            and all(
-                isinstance(key, str) and isinstance(value, xr.DataArray)
-                for data in (X, y)
-                for key, value in data.items()
-            )
-        ):
-            self._n_treated_units = 1
-        else:
+        if not isinstance(X, xr.DataArray) or not isinstance(y, xr.DataArray):
             raise TypeError(
-                "X and y must both be xarray.DataArray objects or non-empty "
-                "dictionaries mapping strings to xarray.DataArray objects"
+                "X and y must both be xarray.DataArray objects; specialized "
+                "mapping inputs must be fitted through PyMCModelAdapter"
             )
 
+        coords = {} if coords is None else coords.copy()
+        for data in (X, y):
+            for dimension in data.dims:
+                coords.setdefault(dimension, data.get_index(dimension))
+        self._n_treated_units = y.sizes.get("treated_units", 1)
+        return self._fit_with_validated_data(X, y, coords)
+
+    def fit_mapping(
+        self,
+        X: dict[str, xr.DataArray],
+        y: dict[str, xr.DataArray],
+        coords: dict[str, Any] | None = None,
+    ) -> xr.DataTree:
+        """Fit a specialized model that accepts mapping-valued inputs.
+
+        Parameters
+        ----------
+        X : dict of str to xarray.DataArray
+            Labeled predictor arrays for specialized model components.
+        y : dict of str to xarray.DataArray
+            Labeled target arrays for specialized model components.
+        coords : dict, optional
+            Coordinate metadata for the model.
+        """
+        raise TypeError(f"{type(self).__name__} does not support mapping-valued inputs")
+
+    def _fit_with_validated_data(
+        self,
+        X: Any,
+        y: Any,
+        coords: dict[str, Any],
+    ) -> xr.DataTree:
+        """Build and sample a model after its public fit boundary validates inputs."""
         # Ensure random_seed is used in sample_prior_predictive() and
         # sample_posterior_predictive() if provided in sample_kwargs.
         random_seed = self.sample_kwargs.get("random_seed", None)
@@ -396,7 +409,7 @@ class PyMCModel(pm.Model):
         # Data-driven priors are computed first, then user-specified priors override them
         self.priors = {**self.priors_from_data(X, y), **self.priors}
 
-        self.build_model(cast(xr.DataArray, X), cast(xr.DataArray, y), coords)
+        self.build_model(X, y, coords)
         with self:
             self.idata = pm.sample(**self.sample_kwargs)
             if self.idata is None:
@@ -1089,6 +1102,67 @@ class SyntheticDifferenceInDifferencesWeightFitter(PyMCModel):
     """  # noqa: W605
 
     default_priors: dict[str, Prior] = {}
+
+    def fit(
+        self,
+        X: xr.DataArray | dict[str, xr.DataArray],
+        y: xr.DataArray | dict[str, xr.DataArray],
+        coords: dict[str, Any] | None = None,
+    ) -> xr.DataTree:
+        """Fit SDID mappings while retaining the ordinary model fit contract.
+
+        Parameters
+        ----------
+        X : xarray.DataArray or dict of str to xarray.DataArray
+            Predictor data for an ordinary fit or the SDID weight modules.
+        y : xarray.DataArray or dict of str to xarray.DataArray
+            Target data for an ordinary fit or the SDID weight modules.
+        coords : dict, optional
+            Coordinate metadata for the model.
+        """
+        if isinstance(X, dict) and isinstance(y, dict):
+            return self.fit_mapping(X, y, coords)
+        if isinstance(X, dict) or isinstance(y, dict):
+            raise TypeError("X and y must either both be mappings or both be arrays")
+        return super().fit(X, y, coords)
+
+    def fit_mapping(
+        self,
+        X: dict[str, xr.DataArray],
+        y: dict[str, xr.DataArray],
+        coords: dict[str, Any] | None = None,
+    ) -> xr.DataTree:
+        """Fit the unit- and time-weight modules from labeled mapping inputs.
+
+        Parameters
+        ----------
+        X : dict of str to xarray.DataArray
+            Unit- and time-weight design matrices.
+        y : dict of str to xarray.DataArray
+            Unit- and time-weight target arrays.
+        coords : dict, optional
+            Coordinate metadata shared by the two modules.
+        """
+        if (
+            not X
+            or not y
+            or not all(
+                isinstance(key, str) and isinstance(value, xr.DataArray)
+                for data in (X, y)
+                for key, value in data.items()
+            )
+        ):
+            raise TypeError(
+                "X and y must be non-empty dictionaries mapping strings to "
+                "xarray.DataArray objects"
+            )
+
+        self._n_treated_units = 1
+        return self._fit_with_validated_data(
+            X,
+            y,
+            {} if coords is None else coords.copy(),
+        )
 
     def priors_from_data(self, X, y) -> dict[str, Any]:
         """

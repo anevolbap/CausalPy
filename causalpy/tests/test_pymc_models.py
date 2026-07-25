@@ -142,6 +142,12 @@ class TestPyMCModel:
         with pytest.raises(TypeError, match="both be xarray.DataArray"):
             MyToyModel().fit(X=X, y=y)
 
+    def test_base_mapping_fit_rejects_unsupported_model(self) -> None:
+        """The mapping fit capability fails clearly on ordinary PyMC models."""
+        data = {"unit": xr.DataArray([1.0], dims=["obs_ind"])}
+        with pytest.raises(TypeError, match="does not support mapping-valued inputs"):
+            PyMCModelAdapter(MyToyModel()).fit(X=data, y=data)
+
     @pytest.mark.parametrize(
         argnames="coords",
         argvalues=[None, {"a": 1}],
@@ -1017,6 +1023,15 @@ class TestSyntheticDifferenceInDifferencesWeightFitter:
             result.posterior["lam"].coords["obs_ind"].values,
             coords["obs_ind"],
         )
+
+    def test_mapping_fit_rejects_malformed_values(self, sdid_data):
+        """The SDID mapping boundary rejects values without xarray labels."""
+        X, y, coords = sdid_data
+        X = {**X, "unit": np.asarray(X["unit"])}
+        adapter = PyMCModelAdapter(SyntheticDifferenceInDifferencesWeightFitter())
+
+        with pytest.raises(TypeError, match="mapping strings to xarray.DataArray"):
+            adapter.fit(X, y, coords=coords)
 
     def test_omega_is_simplex(self, sdid_data):
         """Test that omega weights sum to 1."""
