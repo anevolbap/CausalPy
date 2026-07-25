@@ -1,0 +1,2 @@
+# This VCS dependency is intentionally docs-only: PyPI rejects direct VCS references in published package metadata.
+pymc-marketing @ git+https://github.com/pymc-labs/pymc-marketing.git@v1.0.0
