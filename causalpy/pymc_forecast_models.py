@@ -67,6 +67,7 @@ draw-coherent posterior subsample used for prediction; the *full* fit result
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from typing import Any
 
 import arviz as az
@@ -88,7 +89,7 @@ def _import_pymc_forecast():
         raise ImportError(
             "PyMCForecastModel requires the optional dependency 'pymc-forecast'. "
             "Install it with `pip install causalpy[forecast]` or "
-            "`pip install 'pymc-forecast[extras]>=0.2'`."
+            "`pip install 'pymc-forecast[extras]>=0.2,<0.3'`."
         ) from err
     return pymc_forecast
 
@@ -275,9 +276,15 @@ class PyMCForecastModel:
         # one posterior subsample, shared by every predictive call: draw i of
         # the pre-period fit and draw i of the counterfactual come from the
         # same parameter draw
-        self._posterior = self.forecaster.draw_posterior(
-            self.num_samples, random_seed=self.random_seed
+        posterior_context = (
+            self.forecaster.model
+            if isinstance(self.forecaster, self._pf.Forecaster)
+            else nullcontext()
         )
+        with posterior_context:
+            self._posterior = self.forecaster.draw_posterior(
+                self.num_samples, random_seed=self.random_seed
+            )
         self.idata = xr.DataTree.from_dict({"posterior": self._posterior})
         return self.idata
 
