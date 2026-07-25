@@ -85,7 +85,6 @@ dev = [
 docs = [
     "ipykernel",
     "maketables",
-    "pymc-marketing>=0.13.1",
     "daft-pgm",
     "linkify-it-py",
     "myst-nb<=1.0.0",

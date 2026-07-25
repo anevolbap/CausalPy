@@ -227,6 +227,10 @@ class PyMCModelAdapter(ModelAdapter):
         coords : dict, optional
             Coordinate metadata for the PyMC model.
         """
+        if isinstance(X, dict) and isinstance(y, dict):
+            return self._model.fit_mapping(X=X, y=y, coords=coords)
+        if isinstance(X, dict) or isinstance(y, dict):
+            raise TypeError("X and y must either both be mappings or both be arrays")
         return self._model.fit(X=X, y=y, coords=coords)
 
     def predict(
