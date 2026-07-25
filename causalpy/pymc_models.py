@@ -338,17 +338,20 @@ class PyMCModel(pm.Model):
             )
 
     def fit(
-        self, X: xr.DataArray, y: xr.DataArray, coords: dict[str, Any] | None = None
+        self,
+        X: xr.DataArray,
+        y: xr.DataArray,
+        coords: dict[str, Any] | None = None,
     ) -> xr.DataTree:
         """Draw samples from posterior, prior predictive, and posterior
         predictive distributions.
 
         Parameters
         ----------
-        X : xr.DataArray
-            Input features as an xarray DataArray.
-        y : xr.DataArray
-            Target variable as an xarray DataArray.
+        X : xarray.DataArray
+            Input features as a labeled array.
+        y : xarray.DataArray
+            Target values as a labeled array.
         coords : dict, optional
             Dictionary with coordinate names for named dimensions.
             Defaults to None.
@@ -359,11 +362,45 @@ class PyMCModel(pm.Model):
             DataTree containing the samples.
         """
 
+        if not isinstance(X, xr.DataArray) or not isinstance(y, xr.DataArray):
+            raise TypeError(
+                "X and y must both be xarray.DataArray objects; specialized "
+                "mapping inputs must be fitted through PyMCModelAdapter"
+            )
+
         coords = {} if coords is None else coords.copy()
         for data in (X, y):
             for dimension in data.dims:
                 coords.setdefault(dimension, data.get_index(dimension))
+        self._n_treated_units = y.sizes.get("treated_units", 1)
+        return self._fit_with_validated_data(X, y, coords)
 
+    def fit_mapping(
+        self,
+        X: dict[str, xr.DataArray],
+        y: dict[str, xr.DataArray],
+        coords: dict[str, Any] | None = None,
+    ) -> xr.DataTree:
+        """Fit a specialized model that accepts mapping-valued inputs.
+
+        Parameters
+        ----------
+        X : dict of str to xarray.DataArray
+            Labeled predictor arrays for specialized model components.
+        y : dict of str to xarray.DataArray
+            Labeled target arrays for specialized model components.
+        coords : dict, optional
+            Coordinate metadata for the model.
+        """
+        raise TypeError(f"{type(self).__name__} does not support mapping-valued inputs")
+
+    def _fit_with_validated_data(
+        self,
+        X: Any,
+        y: Any,
+        coords: dict[str, Any],
+    ) -> xr.DataTree:
+        """Build and sample a model after its public fit boundary validates inputs."""
         # Ensure random_seed is used in sample_prior_predictive() and
         # sample_posterior_predictive() if provided in sample_kwargs.
         random_seed = self.sample_kwargs.get("random_seed", None)
@@ -372,7 +409,6 @@ class PyMCModel(pm.Model):
         # Data-driven priors are computed first, then user-specified priors override them
         self.priors = {**self.priors_from_data(X, y), **self.priors}
 
-        self._n_treated_units = y.sizes.get("treated_units", 1)
         self.build_model(X, y, coords)
         with self:
             self.idata = pm.sample(**self.sample_kwargs)
@@ -1067,6 +1103,67 @@ class SyntheticDifferenceInDifferencesWeightFitter(PyMCModel):
 
     default_priors: dict[str, Prior] = {}
 
+    def fit(
+        self,
+        X: xr.DataArray | dict[str, xr.DataArray],
+        y: xr.DataArray | dict[str, xr.DataArray],
+        coords: dict[str, Any] | None = None,
+    ) -> xr.DataTree:
+        """Fit SDID mappings while retaining the ordinary model fit contract.
+
+        Parameters
+        ----------
+        X : xarray.DataArray or dict of str to xarray.DataArray
+            Predictor data for an ordinary fit or the SDID weight modules.
+        y : xarray.DataArray or dict of str to xarray.DataArray
+            Target data for an ordinary fit or the SDID weight modules.
+        coords : dict, optional
+            Coordinate metadata for the model.
+        """
+        if isinstance(X, dict) and isinstance(y, dict):
+            return self.fit_mapping(X, y, coords)
+        if isinstance(X, dict) or isinstance(y, dict):
+            raise TypeError("X and y must either both be mappings or both be arrays")
+        return super().fit(X, y, coords)
+
+    def fit_mapping(
+        self,
+        X: dict[str, xr.DataArray],
+        y: dict[str, xr.DataArray],
+        coords: dict[str, Any] | None = None,
+    ) -> xr.DataTree:
+        """Fit the unit- and time-weight modules from labeled mapping inputs.
+
+        Parameters
+        ----------
+        X : dict of str to xarray.DataArray
+            Unit- and time-weight design matrices.
+        y : dict of str to xarray.DataArray
+            Unit- and time-weight target arrays.
+        coords : dict, optional
+            Coordinate metadata shared by the two modules.
+        """
+        if (
+            not X
+            or not y
+            or not all(
+                isinstance(key, str) and isinstance(value, xr.DataArray)
+                for data in (X, y)
+                for key, value in data.items()
+            )
+        ):
+            raise TypeError(
+                "X and y must be non-empty dictionaries mapping strings to "
+                "xarray.DataArray objects"
+            )
+
+        self._n_treated_units = 1
+        return self._fit_with_validated_data(
+            X,
+            y,
+            {} if coords is None else coords.copy(),
+        )
+
     def priors_from_data(self, X, y) -> dict[str, Any]:
         """
         Set default priors for unit and time weight modules.
@@ -1155,6 +1252,13 @@ class SyntheticDifferenceInDifferencesWeightFitter(PyMCModel):
 class InstrumentalVariableRegression(PyMCModel):
     """Custom PyMC model for instrumental linear regression.
 
+    Parameters
+    ----------
+    sample_kwargs : dict, optional
+        Keyword arguments forwarded to :func:`pymc.sample`.
+    priors : dict, optional
+        Prior configuration used by the model.
+
     Examples
     --------
     >>> import causalpy as cp
@@ -1176,7 +1280,7 @@ class InstrumentalVariableRegression(PyMCModel):
     ...     "tune": 5,
     ...     "draws": 10,
     ...     "chains": 2,
-    ...     "cores": 2,
+    ...     "cores": 1,
     ...     "target_accept": 0.95,
     ...     "progressbar": False,
     ... }
@@ -1197,6 +1301,26 @@ class InstrumentalVariableRegression(PyMCModel):
     ... )
     Inference data...
     """
+
+    def __init__(
+        self,
+        sample_kwargs: dict[str, Any] | None = None,
+        priors: dict[str, Any] | None = None,
+    ) -> None:
+        """Configure IV sampling defaults.
+
+        Parameters
+        ----------
+        sample_kwargs : dict, optional
+            Keyword arguments forwarded to :func:`pymc.sample`.
+        priors : dict, optional
+            Prior configuration passed to the base model.
+        """
+        kwargs = {} if sample_kwargs is None else dict(sample_kwargs)
+        # TEMPORARY: avoid macOS arm64/Python 3.14 PyMC 6.0.1–6.2.0 IV fork-worker crashes (CausalPy #1044, https://github.com/pymc-devs/pymc/issues/8377); remove per #1067 only after the upstream fix is verified and the supported floor excludes this range.
+        if kwargs.get("cores") is None:
+            kwargs["cores"] = 1
+        super().__init__(sample_kwargs=kwargs, priors=priors)
 
     def build_model(  # type: ignore
         self,
@@ -1383,13 +1507,19 @@ class InstrumentalVariableRegression(PyMCModel):
         ----------
         ppc_sampler : {"jax", "pymc"}, optional
             Backend used for posterior predictive sampling. ``"jax"`` (the
-            default) is much faster for the multivariate Normal likelihood;
-            ``"pymc"`` additionally samples the prior predictive.
+            default) requires JAX and samples only the posterior predictive distribution; ``"pymc"`` is the fallback and additionally samples the prior predictive.
         """
         random_seed = self.sample_kwargs.get("random_seed", None)
 
         if ppc_sampler == "jax":
             if self.idata is not None:
+                try:
+                    import jax  # noqa: F401
+                except ModuleNotFoundError as err:
+                    raise ImportError(
+                        "ppc_sampler='jax' requires JAX. Install jax or use "
+                        "ppc_sampler='pymc'."
+                    ) from err
                 with self:
                     pm.sample_posterior_predictive(
                         self.idata,
@@ -1444,7 +1574,7 @@ class InstrumentalVariableRegression(PyMCModel):
         priors : dict
             Prior specification dictionary forwarded to :meth:`build_model`.
         ppc_sampler : {"jax", "pymc"}, optional
-            Backend for posterior predictive sampling. ``None`` skips it.
+            Backend for posterior predictive sampling. ``"jax"`` requires JAX, ``"pymc"`` is the fallback, and ``None`` skips it.
         vs_prior_type : {"spike_and_slab", "horseshoe", "normal"}, optional
             Variable-selection prior type, forwarded to :meth:`build_model`.
         vs_hyperparams : dict, optional
