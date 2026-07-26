@@ -142,7 +142,7 @@ class PyMCModel(pm.Model):
     ...         "random_seed": 42,
     ...     }
     ... )
-    >>> model.fit(
+    >>> _ = model.fit(
     ...     X,
     ...     y,
     ...     coords={
@@ -151,14 +151,12 @@ class PyMCModel(pm.Model):
     ...         "treated_units": ["unit_0"],
     ...     },
     ... )
-    Inference data...
     >>> model.score(X, y)  # doctest: +ELLIPSIS
     unit_0_r2        ...
     unit_0_r2_std    ...
     dtype: float64
     >>> X_new = rng.normal(loc=0, scale=1, size=(20, 2))
-    >>> model.predict(X_new)
-    Inference data...
+    >>> _ = model.predict(X_new)
     """
 
     default_priors: dict[str, Prior] = {}
@@ -685,8 +683,7 @@ class LinearRegression(PyMCModel):
     ... )
     >>> lr = LinearRegression(sample_kwargs={"progressbar": False})
     >>> coords={"coeffs": coeffs, "obs_ind": np.arange(rd.shape[0]), "treated_units": ["unit_0"]}
-    >>> lr.fit(X, y, coords=coords)
-    Inference data...
+    >>> _ = lr.fit(X, y, coords=coords)
     """  # noqa: W605
 
     default_priors = {
@@ -765,8 +762,7 @@ class WeightedSumFitter(PyMCModel):
     ...     "obs_ind": np.arange(sc.shape[0]),
     ... }
     >>> wsf = WeightedSumFitter(sample_kwargs={"progressbar": False})
-    >>> wsf.fit(X, y, coords=coords)
-    Inference data...
+    >>> _ = wsf.fit(X, y, coords=coords)
     """  # noqa: W605
 
     default_priors = {
@@ -945,8 +941,7 @@ class SoftmaxWeightedSumFitter(PyMCModel):
     ...     "obs_ind": np.arange(sc.shape[0]),
     ... }
     >>> wsf = SoftmaxWeightedSumFitter(sample_kwargs={"progressbar": False})
-    >>> wsf.fit(X, y, coords=coords)
-    Inference data...
+    >>> _ = wsf.fit(X, y, coords=coords)
     """  # noqa: W605
 
     default_priors = {
@@ -1285,7 +1280,7 @@ class InstrumentalVariableRegression(PyMCModel):
     ...     "progressbar": False,
     ... }
     >>> iv_reg = InstrumentalVariableRegression(sample_kwargs=sample_kwargs)
-    >>> iv_reg.fit(
+    >>> _ = iv_reg.fit(
     ...     X,
     ...     Z,
     ...     y,
@@ -1299,7 +1294,6 @@ class InstrumentalVariableRegression(PyMCModel):
     ...     },
     ...     None,
     ... )
-    Inference data...
     """
 
     def __init__(
@@ -1621,13 +1615,12 @@ class PropensityScore(PyMCModel):
     >>> X = df[["age", "race"]]
     >>> t = np.asarray(df["trt"])
     >>> ps = PropensityScore(sample_kwargs={"progressbar": False})
-    >>> ps.fit(X, t, coords={
+    >>> _ = ps.fit(X, t, coords={
     ...                 'coeffs': ['age', 'race'],
     ...                 'obs_ind': np.arange(df.shape[0])
     ...                },
     ...                prior={'b': [0, 1]},
     ... )
-    Inference...
     """  # noqa: W605
 
     default_priors = {
