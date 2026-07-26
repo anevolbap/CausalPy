@@ -2,21 +2,23 @@ name: Test Notebooks
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, pymc6_and_pymcmarketing1_migration]
     paths:
       - "pyproject.toml"
       - "causalpy/**"
       - ".github/workflows/test_notebook.yml"
       - "scripts/run_notebooks/**"
       - "docs/source/notebooks/**"
+      - "docs/source/knowledgebase/**"
   push:
-    branches: [main]
+    branches: [main, pymc6_and_pymcmarketing1_migration]
     paths:
       - "pyproject.toml"
       - "causalpy/**"
       - ".github/workflows/test_notebook.yml"
       - "scripts/run_notebooks/**"
       - "docs/source/notebooks/**"
+      - "docs/source/knowledgebase/**"
 
 permissions: {}
 
@@ -29,13 +31,32 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    timeout-minutes: 60
+    timeout-minutes: 180
     strategy:
+      fail-fast: false
+      max-parallel: 1
       matrix:
-        split:
-          - "--pattern *-pymc.ipynb"
-          - "--pattern *-sklearn.ipynb"
-          - "--exclude-pattern=pymc --exclude-pattern=sklearn"
+        include:
+          - name: gallery-pymc
+            collection: gallery
+            pattern: "*-pymc.ipynb"
+            exclude_one: ""
+            exclude_two: ""
+          - name: gallery-sklearn
+            collection: gallery
+            pattern: "*-sklearn.ipynb"
+            exclude_one: ""
+            exclude_two: ""
+          - name: gallery-other
+            collection: gallery
+            pattern: ""
+            exclude_one: "*-pymc.ipynb"
+            exclude_two: "*-sklearn.ipynb"
+          - name: knowledgebase
+            collection: knowledgebase
+            pattern: ""
+            exclude_one: ""
+            exclude_two: ""
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -51,7 +72,24 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip
+          pip install -r docs/requirements.txt
           pip install -e ".[test,docs]"
 
       - name: Run notebooks
-        run: python scripts/run_notebooks/runner.py ${{ matrix.split }}
+        env:
+          NOTEBOOK_COLLECTION: ${{ matrix.collection }}
+          NOTEBOOK_PATTERN: ${{ matrix.pattern }}
+          NOTEBOOK_EXCLUDE_ONE: ${{ matrix.exclude_one }}
+          NOTEBOOK_EXCLUDE_TWO: ${{ matrix.exclude_two }}
+        run: |
+          args=(--collection "$NOTEBOOK_COLLECTION")
+          if [[ -n "$NOTEBOOK_PATTERN" ]]; then
+            args+=(--pattern "$NOTEBOOK_PATTERN")
+          fi
+          if [[ -n "$NOTEBOOK_EXCLUDE_ONE" ]]; then
+            args+=(--exclude-pattern "$NOTEBOOK_EXCLUDE_ONE")
+          fi
+          if [[ -n "$NOTEBOOK_EXCLUDE_TWO" ]]; then
+            args+=(--exclude-pattern "$NOTEBOOK_EXCLUDE_TWO")
+          fi
+          python scripts/run_notebooks/runner.py "${args[@]}"
