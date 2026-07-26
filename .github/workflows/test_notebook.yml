@@ -24,7 +24,7 @@ permissions: {}
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   notebooks:
@@ -50,8 +50,8 @@ jobs:
           - name: gallery-other
             collection: gallery
             pattern: ""
-            exclude_one: pymc
-            exclude_two: sklearn
+            exclude_one: "*-pymc.ipynb"
+            exclude_two: "*-sklearn.ipynb"
           - name: knowledgebase
             collection: knowledgebase
             pattern: ""

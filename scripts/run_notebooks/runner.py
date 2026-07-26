@@ -91,9 +91,12 @@ def setup_logging() -> None:
 def configure_kernel_path() -> None:
     """Prefer the active Python environment's kernels over user kernels."""
     environment_jupyter_path = str(Path(sys.prefix) / "share" / "jupyter")
-    existing_path = os.environ.get("JUPYTER_PATH")
+    existing_paths = os.environ.get("JUPYTER_PATH", "").split(os.pathsep)
+    remaining_paths = [
+        path for path in existing_paths if path and path != environment_jupyter_path
+    ]
     os.environ["JUPYTER_PATH"] = os.pathsep.join(
-        filter(None, (environment_jupyter_path, existing_path))
+        [environment_jupyter_path, *remaining_paths]
     )
 
 
@@ -208,17 +211,40 @@ def get_notebooks(
             f"Unknown notebook collection(s): {', '.join(unknown_collections)}"
         )
 
-    roots = {
-        name: NOTEBOOK_COLLECTIONS[name].resolve() for name in selected_collections
-    }
+    repo_root = REPO_ROOT.resolve()
     allowed_roots = {
         name: path.resolve() for name, path in NOTEBOOK_COLLECTIONS.items()
     }
+    symlinked_roots = [
+        name for name, path in NOTEBOOK_COLLECTIONS.items() if path.is_symlink()
+    ]
+    if symlinked_roots:
+        raise ValueError(
+            "Notebook collection root(s) cannot be symlinks: "
+            f"{', '.join(sorted(symlinked_roots))}"
+        )
+    escaped_roots = [
+        name
+        for name, root in allowed_roots.items()
+        if not root.is_relative_to(repo_root)
+    ]
+    if escaped_roots:
+        raise ValueError(
+            "Notebook collection root(s) are outside the repository: "
+            f"{', '.join(sorted(escaped_roots))}"
+        )
+    roots = {name: allowed_roots[name] for name in selected_collections}
 
-    def validate_path(path: Path, raw_path: str) -> Path:
+    def validate_path(
+        path: Path,
+        raw_path: str,
+        expected_root: Path | None = None,
+    ) -> Path:
         path = path.resolve()
         if path.suffix != ".ipynb" or not path.is_file():
             raise ValueError(f"Notebook does not exist: {raw_path}")
+        if expected_root is not None and not path.is_relative_to(expected_root):
+            raise ValueError(f"Notebook escapes its configured collection: {raw_path}")
         if not any(path.is_relative_to(root) for root in allowed_roots.values()):
             raise ValueError(
                 f"Notebook is outside configured documentation collections: {raw_path}"
@@ -237,10 +263,23 @@ def get_notebooks(
             path = Path(raw_path)
             if not path.is_absolute():
                 path = REPO_ROOT / path
-            notebooks.append(validate_path(path, raw_path))
+            lexical_path = Path(os.path.abspath(path))
+            matching_roots = [
+                allowed_roots[name]
+                for name, collection_root in NOTEBOOK_COLLECTIONS.items()
+                if lexical_path.is_relative_to(Path(os.path.abspath(collection_root)))
+            ]
+            if not matching_roots:
+                raise ValueError(
+                    "Notebook is outside configured documentation collections: "
+                    f"{raw_path}"
+                )
+            notebooks.append(
+                validate_path(path, raw_path, expected_root=matching_roots[0])
+            )
     else:
         notebooks = [
-            validate_path(notebook, str(notebook))
+            validate_path(notebook, str(notebook), expected_root=root)
             for root in roots.values()
             for notebook in root.glob("*.ipynb")
         ]
@@ -262,7 +301,10 @@ def get_notebooks(
 
     if exclude_patterns:
         for exc in exclude_patterns:
-            notebooks = [nb for nb in notebooks if exc not in nb.name]
+            if any(character in exc for character in "*?["):
+                notebooks = [nb for nb in notebooks if not nb.match(exc)]
+            else:
+                notebooks = [nb for nb in notebooks if exc not in nb.name]
 
     if notebook_paths:
         return list(dict.fromkeys(notebooks))
@@ -345,8 +387,22 @@ def main(argv: list[str] | None = None) -> int:
             "and outputs will be saved in place. This can take a long time."
         )
 
+    failures: list[tuple[Path, Exception]] = []
     for notebook in notebooks:
-        run_notebook(notebook, full=args.full)
+        try:
+            run_notebook(notebook, full=args.full)
+        except Exception as error:
+            LOGGER.exception("Notebook failed: %s", notebook)
+            failures.append((notebook, error))
+
+    if failures:
+        failure_details = "; ".join(
+            f"{notebook.name}: {type(error).__name__}: {error}"
+            for notebook, error in failures
+        )
+        raise RuntimeError(
+            f"{len(failures)} notebook(s) failed: {failure_details}"
+        ) from failures[0][1]
 
     LOGGER.info("All notebooks completed successfully!")
     return 0

@@ -18,10 +18,12 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 from scripts.run_notebooks import runner
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+PRODUCTION_NOTEBOOK_COLLECTIONS = set(runner.NOTEBOOK_COLLECTIONS)
 
 
 @pytest.fixture
@@ -36,7 +38,9 @@ def notebook_collections(
         gallery / "alpha-pymc.ipynb",
         gallery / "beta-sklearn.ipynb",
         gallery / "other.ipynb",
+        gallery / "pymc-introduction.ipynb",
         gallery / "skipped.ipynb",
+        gallery / "sklearn-overview.ipynb",
         knowledgebase / "concepts.ipynb",
     ):
         path.touch()
@@ -57,6 +61,8 @@ def test_default_selection_uses_gallery_and_mock_skip_policy(
         "alpha-pymc.ipynb",
         "beta-sklearn.ipynb",
         "other.ipynb",
+        "pymc-introduction.ipynb",
+        "sklearn-overview.ipynb",
     ]
 
 
@@ -125,6 +131,7 @@ def test_pattern_and_exclusion_filters_compose(
     assert [notebook.name for notebook in notebooks] == [
         "beta-sklearn.ipynb",
         "other.ipynb",
+        "sklearn-overview.ipynb",
     ]
 
     notebooks = runner.get_notebooks(exclude_patterns=["pymc", "sklearn"])
@@ -133,18 +140,91 @@ def test_pattern_and_exclusion_filters_compose(
 
 def test_workflow_shards_are_exhaustive_and_non_overlapping(
     notebook_collections: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    shards = [
-        runner.get_notebooks(pattern="*-pymc.ipynb"),
-        runner.get_notebooks(pattern="*-sklearn.ipynb"),
-        runner.get_notebooks(exclude_patterns=["pymc", "sklearn"]),
-        runner.get_notebooks(collections=["knowledgebase"]),
+    workflow = yaml.safe_load(
+        (REPO_ROOT / ".github" / "workflows" / "test_notebook.yml").read_text()
+    )
+    notebook_job = workflow["jobs"]["notebooks"]
+    strategy = notebook_job["strategy"]
+    matrix = strategy["matrix"]["include"]
+    run_step = next(
+        step for step in notebook_job["steps"] if step.get("name") == "Run notebooks"
+    )
+
+    assert workflow["concurrency"]["cancel-in-progress"] is True
+    assert strategy["fail-fast"] is False
+    assert strategy["max-parallel"] == 1
+    assert {shard["collection"] for shard in matrix} == PRODUCTION_NOTEBOOK_COLLECTIONS
+    assert run_step["env"] == {
+        "NOTEBOOK_COLLECTION": "${{ matrix.collection }}",
+        "NOTEBOOK_PATTERN": "${{ matrix.pattern }}",
+        "NOTEBOOK_EXCLUDE_ONE": "${{ matrix.exclude_one }}",
+        "NOTEBOOK_EXCLUDE_TWO": "${{ matrix.exclude_two }}",
+    }
+    for expected_fragment in (
+        'args=(--collection "$NOTEBOOK_COLLECTION")',
+        'args+=(--pattern "$NOTEBOOK_PATTERN")',
+        'args+=(--exclude-pattern "$NOTEBOOK_EXCLUDE_ONE")',
+        'args+=(--exclude-pattern "$NOTEBOOK_EXCLUDE_TWO")',
+        'python scripts/run_notebooks/runner.py "${args[@]}"',
+    ):
+        assert expected_fragment in run_step["run"]
+    assert matrix == [
+        {
+            "name": "gallery-pymc",
+            "collection": "gallery",
+            "pattern": "*-pymc.ipynb",
+            "exclude_one": "",
+            "exclude_two": "",
+        },
+        {
+            "name": "gallery-sklearn",
+            "collection": "gallery",
+            "pattern": "*-sklearn.ipynb",
+            "exclude_one": "",
+            "exclude_two": "",
+        },
+        {
+            "name": "gallery-other",
+            "collection": "gallery",
+            "pattern": "",
+            "exclude_one": "*-pymc.ipynb",
+            "exclude_two": "*-sklearn.ipynb",
+        },
+        {
+            "name": "knowledgebase",
+            "collection": "knowledgebase",
+            "pattern": "",
+            "exclude_one": "",
+            "exclude_two": "",
+        },
     ]
+
+    shards: list[list[Path]] = []
+    original_get_notebooks = runner.get_notebooks
+
+    def record_selection(*args, **kwargs) -> list[Path]:
+        selected = original_get_notebooks(*args, **kwargs)
+        shards.append(selected)
+        return selected
+
+    monkeypatch.setattr(runner, "get_notebooks", record_selection)
+    for shard in matrix:
+        argv = ["--collection", shard["collection"], "--list"]
+        if shard["pattern"]:
+            argv.extend(["--pattern", shard["pattern"]])
+        for exclude_pattern in (shard["exclude_one"], shard["exclude_two"]):
+            if exclude_pattern:
+                argv.extend(["--exclude-pattern", exclude_pattern])
+        assert runner.main(argv) == 0
     selected = [notebook for shard in shards for notebook in shard]
     expected = [
         notebook_collections["gallery"] / "alpha-pymc.ipynb",
         notebook_collections["gallery"] / "beta-sklearn.ipynb",
         notebook_collections["gallery"] / "other.ipynb",
+        notebook_collections["gallery"] / "pymc-introduction.ipynb",
+        notebook_collections["gallery"] / "sklearn-overview.ipynb",
         notebook_collections["knowledgebase"] / "concepts.ipynb",
     ]
 
@@ -170,7 +250,59 @@ def test_collection_symlink_cannot_escape_allowed_root(
     outside.touch()
     (notebook_collections["gallery"] / "escape.ipynb").symlink_to(outside)
 
-    with pytest.raises(ValueError, match="outside configured"):
+    with pytest.raises(ValueError, match="escapes its configured collection"):
+        runner.get_notebooks()
+
+
+def test_notebook_symlink_cannot_cross_collection_boundary(
+    notebook_collections: dict[str, Path],
+) -> None:
+    cross_collection_link = notebook_collections["gallery"] / "concepts.ipynb"
+    cross_collection_link.symlink_to(
+        notebook_collections["knowledgebase"] / "concepts.ipynb"
+    )
+
+    with pytest.raises(ValueError, match="escapes its configured collection"):
+        runner.get_notebooks(collections=["gallery"])
+
+    with pytest.raises(ValueError, match="escapes its configured collection"):
+        runner.get_notebooks(notebook_paths=["docs/source/notebooks/concepts.ipynb"])
+
+
+def test_collection_root_cannot_escape_repository(
+    notebook_collections: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    outside.mkdir()
+    (outside / "external.ipynb").touch()
+    monkeypatch.setattr(
+        runner,
+        "NOTEBOOK_COLLECTIONS",
+        {**notebook_collections, "gallery": outside},
+    )
+
+    with pytest.raises(ValueError, match="root.*outside the repository"):
+        runner.get_notebooks()
+
+
+def test_collection_root_cannot_alias_another_collection(
+    notebook_collections: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    linked_collection = tmp_path / "linked-notebooks"
+    linked_collection.symlink_to(
+        notebook_collections["knowledgebase"], target_is_directory=True
+    )
+    monkeypatch.setattr(
+        runner,
+        "NOTEBOOK_COLLECTIONS",
+        {**notebook_collections, "gallery": linked_collection},
+    )
+
+    with pytest.raises(ValueError, match="root.*cannot be symlinks"):
         runner.get_notebooks()
 
 
@@ -199,6 +331,12 @@ def test_kernel_path_prefers_active_environment(
 
     runner.configure_kernel_path()
 
+    assert runner.os.environ["JUPYTER_PATH"].split(runner.os.pathsep) == [
+        str(environment_prefix / "share" / "jupyter"),
+        "/custom/jupyter",
+    ]
+
+    runner.configure_kernel_path()
     assert runner.os.environ["JUPYTER_PATH"].split(runner.os.pathsep) == [
         str(environment_prefix / "share" / "jupyter"),
         "/custom/jupyter",
@@ -234,6 +372,60 @@ def test_main_executes_exact_notebooks_serially_and_forwards_full(
     ]
 
 
+def test_main_configures_kernel_before_execution(
+    notebook_collections: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    environment_prefix = tmp_path / "env"
+    expected_kernel_path = str(environment_prefix / "share" / "jupyter")
+    observed_kernel_paths: list[str] = []
+    monkeypatch.setattr(runner.sys, "prefix", str(environment_prefix))
+    monkeypatch.delenv("JUPYTER_PATH", raising=False)
+    monkeypatch.setattr(
+        runner,
+        "run_notebook",
+        lambda path, *, full=False: observed_kernel_paths.append(
+            runner.os.environ["JUPYTER_PATH"]
+        ),
+    )
+
+    runner.main(["--notebook", "docs/source/notebooks/alpha-pymc.ipynb"])
+
+    assert observed_kernel_paths == [expected_kernel_path]
+
+
+def test_main_attempts_all_notebooks_before_reporting_failures(
+    notebook_collections: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempted: list[str] = []
+
+    def run_notebook(path: Path, *, full: bool = False) -> None:
+        attempted.append(path.name)
+        if path.name in {"alpha-pymc.ipynb", "other.ipynb"}:
+            raise ValueError("notebook failed")
+
+    monkeypatch.setattr(runner, "run_notebook", run_notebook)
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            r"2 notebook\(s\) failed: alpha-pymc.ipynb: ValueError: notebook "
+            r"failed; other.ipynb: ValueError: notebook failed"
+        ),
+    ):
+        runner.main([])
+
+    assert attempted == [
+        "alpha-pymc.ipynb",
+        "beta-sklearn.ipynb",
+        "other.ipynb",
+        "pymc-introduction.ipynb",
+        "sklearn-overview.ipynb",
+    ]
+
+
 def test_main_rejects_empty_selection(
     notebook_collections: dict[str, Path],
 ) -> None:
@@ -253,13 +445,26 @@ def test_injected_mock_builds_datatree_groups() -> None:
     script = f"""
 import runpy
 import pymc as pm
+import xarray as xr
 namespace = runpy.run_path({str(injected_path)!r})
 with pm.Model() as model:
-    pm.Normal("x")
-    result = namespace["mock_sample"](draws=3, random_seed=42, model=model)
+    x = pm.Normal("x")
+    pm.Normal("y", x, 1, observed=[0.0])
+    pm.Normal("z", x, 1, observed=[1.0])
+    result = namespace["mock_sample"](
+        draws=3,
+        random_seed=42,
+        model=model,
+        idata_kwargs={{"log_likelihood": ["y"]}},
+    )
+assert isinstance(result, xr.DataTree)
 assert "posterior" in result
 assert "sample_stats" in result
+assert "log_likelihood" in result
+assert set(result["log_likelihood"].data_vars) == {{"y"}}
+assert {{"chain", "draw"}}.issubset(result["log_likelihood"]["y"].dims)
 assert "prior" not in result
+assert "prior_predictive" not in result
 assert result["posterior"]["x"].sizes["draw"] == 100
 """
 
@@ -271,6 +476,30 @@ assert result["posterior"]["x"].sizes["draw"] == 100
     )
 
     assert result.returncode == 0, result.stderr
+
+
+def test_production_skip_configuration_is_consistent() -> None:
+    skip_notebooks = set(
+        yaml.safe_load(
+            (REPO_ROOT / "scripts" / "run_notebooks" / "skip_notebooks.yml").read_text()
+        )
+    )
+    assert skip_notebooks == {
+        "gallery/instrumental-variables-pymc.ipynb",
+        "gallery/instrumental-variables-weak-instruments.ipynb",
+        "gallery/interrupted-time-series-causalpy-vs-causalimpact.ipynb",
+    }
+
+    for key in skip_notebooks:
+        collection, relative_path = key.split("/", maxsplit=1)
+        notebook = runner.NOTEBOOK_COLLECTIONS[collection] / relative_path
+        assert notebook.is_file()
+        assert notebook.resolve() not in runner.get_notebooks(collections=[collection])
+        with pytest.raises(ValueError, match="Use --full"):
+            runner.get_notebooks(notebook_paths=[str(notebook)])
+        assert runner.get_notebooks(notebook_paths=[str(notebook)], full=True) == [
+            notebook.resolve()
+        ]
 
 
 def test_unknown_collection_is_rejected(

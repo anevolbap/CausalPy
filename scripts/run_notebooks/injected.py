@@ -12,6 +12,7 @@ def mock_sample(*args, **kwargs):
     """Mock pm.sample using prior predictive sampling for speed."""
     random_seed = kwargs.get("random_seed")
     model = kwargs.get("model")
+    idata_kwargs = kwargs.get("idata_kwargs") or {}
 
     # If no model is provided via kwargs, try to infer it from positional args
     if model is None and args:
@@ -32,6 +33,17 @@ def mock_sample(*args, **kwargs):
         draws=n_draws,
     )
     idata["posterior"] = idata["prior"].to_dataset().copy()
+
+    log_likelihood = idata_kwargs.get("log_likelihood")
+    if log_likelihood:
+        var_names = None if log_likelihood is True else log_likelihood
+        idata = pm.compute_log_likelihood(
+            idata,
+            model=model,
+            var_names=var_names,
+            extend_inferencedata=True,
+            progressbar=False,
+        )
 
     # Create mock sample stats with diverging data
     if "sample_stats" not in idata:
