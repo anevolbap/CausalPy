@@ -35,6 +35,8 @@ Run the knowledgebase notebooks:
 
 import argparse
 import logging
+import os
+import sys
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from uuid import uuid4
@@ -83,6 +85,15 @@ def setup_logging() -> None:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s - %(levelname)s - %(message)s",
+    )
+
+
+def configure_kernel_path() -> None:
+    """Prefer the active Python environment's kernels over user kernels."""
+    environment_jupyter_path = str(Path(sys.prefix) / "share" / "jupyter")
+    existing_path = os.environ.get("JUPYTER_PATH")
+    os.environ["JUPYTER_PATH"] = os.pathsep.join(
+        filter(None, (environment_jupyter_path, existing_path))
     )
 
 
@@ -307,6 +318,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     """Select and execute notebooks serially from command-line arguments."""
     setup_logging()
+    configure_kernel_path()
     args = parse_args(argv)
 
     notebooks = get_notebooks(

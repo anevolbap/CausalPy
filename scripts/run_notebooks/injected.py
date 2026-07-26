@@ -31,7 +31,7 @@ def mock_sample(*args, **kwargs):
         random_seed=random_seed,
         draws=n_draws,
     )
-    idata.add_groups(posterior=idata.prior)
+    idata["posterior"] = idata["prior"].to_dataset().copy()
 
     # Create mock sample stats with diverging data
     if "sample_stats" not in idata:
@@ -44,11 +44,11 @@ def mock_sample(*args, **kwargs):
                 )
             }
         )
-        idata.add_groups(sample_stats=sample_stats)
+        idata["sample_stats"] = sample_stats
 
-    del idata.prior
+    del idata["prior"]
     if "prior_predictive" in idata:
-        del idata.prior_predictive
+        del idata["prior_predictive"]
 
     return idata
 

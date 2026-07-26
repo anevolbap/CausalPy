@@ -13,11 +13,15 @@
 #   limitations under the License.
 """Tests for resource-safe documentation notebook selection."""
 
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 from scripts.run_notebooks import runner
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 @pytest.fixture
@@ -185,6 +189,22 @@ def test_main_list_mode_never_executes_notebooks(
     assert executed == []
 
 
+def test_kernel_path_prefers_active_environment(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    environment_prefix = tmp_path / "env"
+    monkeypatch.setattr(runner.sys, "prefix", str(environment_prefix))
+    monkeypatch.setenv("JUPYTER_PATH", "/custom/jupyter")
+
+    runner.configure_kernel_path()
+
+    assert runner.os.environ["JUPYTER_PATH"].split(runner.os.pathsep) == [
+        str(environment_prefix / "share" / "jupyter"),
+        "/custom/jupyter",
+    ]
+
+
 def test_main_executes_exact_notebooks_serially_and_forwards_full(
     notebook_collections: dict[str, Path],
     monkeypatch: pytest.MonkeyPatch,
@@ -226,6 +246,31 @@ def test_parallel_option_is_not_supported(
 ) -> None:
     with pytest.raises(SystemExit):
         runner.parse_args(["--parallel"])
+
+
+def test_injected_mock_builds_datatree_groups() -> None:
+    injected_path = REPO_ROOT / "scripts" / "run_notebooks" / "injected.py"
+    script = f"""
+import runpy
+import pymc as pm
+namespace = runpy.run_path({str(injected_path)!r})
+with pm.Model() as model:
+    pm.Normal("x")
+    result = namespace["mock_sample"](draws=3, random_seed=42, model=model)
+assert "posterior" in result
+assert "sample_stats" in result
+assert "prior" not in result
+assert result["posterior"]["x"].sizes["draw"] == 100
+"""
+
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_unknown_collection_is_rejected(
