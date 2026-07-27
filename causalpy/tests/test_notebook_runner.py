@@ -347,6 +347,46 @@ def test_full_execution_allows_long_silent_cells(
     ]
 
 
+def test_mock_execution_discards_output_and_cleans_temp(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    notebook = tmp_path / "notebook.ipynb"
+    notebook.write_text(
+        '{"cells": [], "metadata": {}, "nbformat": 4, "nbformat_minor": 5}'
+    )
+    calls: list[dict[str, object]] = []
+    temp_paths: list[Path] = []
+    injected: list[list[object]] = []
+
+    def execute_notebook(**kwargs: object) -> None:
+        temp_path = Path(str(kwargs["input_path"]))
+        assert temp_path.exists()
+        temp_paths.append(temp_path)
+        calls.append(kwargs)
+
+    monkeypatch.setattr(runner.papermill, "execute_notebook", execute_notebook)
+    monkeypatch.setattr(
+        runner,
+        "inject_mock_code",
+        lambda cells: injected.append(cells),
+    )
+
+    runner.run_notebook(notebook)
+
+    assert len(calls) == 1
+    assert calls[0] == {
+        "input_path": str(temp_paths[0]),
+        "output_path": None,
+        "kernel_name": runner.KERNEL_NAME,
+        "progress_bar": True,
+        "cwd": notebook.parent,
+        "iopub_timeout": runner.IOPUB_TIMEOUT_SECONDS,
+        "raise_on_iopub_timeout": False,
+    }
+    assert injected == [[]]
+    assert not temp_paths[0].exists()
+
+
 def test_kernel_path_prefers_active_environment(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -524,6 +564,38 @@ with pm.Model() as model:
 assert [call["random_seed"] for call in calls] == [1040, 1040]
 assert calls[0].get("compile_kwargs") is None
 assert calls[1]["compile_kwargs"] == {{"mode": namespace["FALLBACK_COMPILE_MODE"]}}
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_injected_mock_does_not_retry_other_errors() -> None:
+    injected_path = REPO_ROOT / "scripts" / "run_notebooks" / "injected.py"
+    script = f"""
+import runpy
+import pymc as pm
+namespace = runpy.run_path({str(injected_path)!r})
+calls = 0
+def failing_sample_prior_predictive(*args, **kwargs):
+    global calls
+    calls += 1
+    raise ValueError("model error")
+pm.sample_prior_predictive = failing_sample_prior_predictive
+with pm.Model() as model:
+    pm.Normal("x")
+    try:
+        namespace["mock_sample"](random_seed=1040, model=model)
+    except ValueError as error:
+        assert str(error) == "model error"
+    else:
+        raise AssertionError("ValueError was not propagated")
+assert calls == 1
 """
     result = subprocess.run(
         [sys.executable, "-c", script],
