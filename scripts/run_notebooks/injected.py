@@ -6,6 +6,7 @@ import xarray as xr
 
 # Minimum draws needed to satisfy notebook code that iterates over posterior samples
 MIN_DRAWS = 100
+FALLBACK_COMPILE_MODE = "FAST_COMPILE"
 
 
 def mock_sample(*args, **kwargs):
@@ -27,11 +28,19 @@ def mock_sample(*args, **kwargs):
     # Ensure enough draws for notebook code while keeping execution fast.
     n_draws = max(MIN_DRAWS, requested_draws or MIN_DRAWS)
 
-    idata = pm.sample_prior_predictive(
-        model=model,
-        random_seed=random_seed,
-        draws=n_draws,
-    )
+    try:
+        idata = pm.sample_prior_predictive(
+            model=model,
+            random_seed=random_seed,
+            draws=n_draws,
+        )
+    except ZeroDivisionError:
+        idata = pm.sample_prior_predictive(
+            model=model,
+            random_seed=random_seed,
+            draws=n_draws,
+            compile_kwargs={"mode": FALLBACK_COMPILE_MODE},
+        )
     idata["posterior"] = idata["prior"].to_dataset().copy()
 
     log_likelihood = idata_kwargs.get("log_likelihood")

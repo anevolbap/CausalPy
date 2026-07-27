@@ -504,6 +504,37 @@ assert result["posterior"]["x"].sizes["draw"] == 100
     assert result.returncode == 0, result.stderr
 
 
+def test_injected_mock_retries_numba_division_by_zero() -> None:
+    injected_path = REPO_ROOT / "scripts" / "run_notebooks" / "injected.py"
+    script = f"""
+import runpy
+import pymc as pm
+namespace = runpy.run_path({str(injected_path)!r})
+sample_prior_predictive = pm.sample_prior_predictive
+calls = []
+def flaky_sample_prior_predictive(*args, **kwargs):
+    calls.append(kwargs)
+    if len(calls) == 1:
+        raise ZeroDivisionError("numba prior RNG stream")
+    return sample_prior_predictive(*args, **kwargs)
+pm.sample_prior_predictive = flaky_sample_prior_predictive
+with pm.Model() as model:
+    pm.Normal("x")
+    namespace["mock_sample"](random_seed=1040, model=model)
+assert [call["random_seed"] for call in calls] == [1040, 1040]
+assert calls[0].get("compile_kwargs") is None
+assert calls[1]["compile_kwargs"] == {{"mode": namespace["FALLBACK_COMPILE_MODE"]}}
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_production_skip_configuration_is_consistent() -> None:
     skip_notebooks = set(
         yaml.safe_load(
