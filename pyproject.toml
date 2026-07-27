@@ -86,6 +86,7 @@ docs = [
     "ipykernel",
     "maketables",
     "daft-pgm",
+    "pymc-bart",
     "linkify-it-py",
     "myst-nb<=1.0.0",
     "pathlib",
