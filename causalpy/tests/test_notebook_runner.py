@@ -321,6 +321,32 @@ def test_main_list_mode_never_executes_notebooks(
     assert executed == []
 
 
+def test_full_execution_allows_long_silent_cells(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    notebook = tmp_path / "notebook.ipynb"
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        runner.papermill,
+        "execute_notebook",
+        lambda **kwargs: calls.append(kwargs),
+    )
+
+    runner.run_notebook(notebook, full=True)
+
+    assert calls == [
+        {
+            "input_path": str(notebook),
+            "output_path": str(notebook),
+            "kernel_name": runner.KERNEL_NAME,
+            "progress_bar": True,
+            "cwd": notebook.parent,
+            "iopub_timeout": runner.IOPUB_TIMEOUT_SECONDS,
+            "raise_on_iopub_timeout": False,
+        }
+    ]
+
+
 def test_kernel_path_prefers_active_environment(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

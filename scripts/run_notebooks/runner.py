@@ -58,6 +58,7 @@ NOTEBOOK_COLLECTIONS = {
 }
 KERNEL_NAME = "python3"
 LOGGER = logging.getLogger(__name__)
+IOPUB_TIMEOUT_SECONDS = 300
 
 INJECTED_CODE_FILE = HERE / "injected.py"
 INJECTED_CODE = INJECTED_CODE_FILE.read_text()
@@ -150,6 +151,8 @@ def run_notebook(notebook_path: Path, *, full: bool = False) -> None:
             kernel_name=KERNEL_NAME,
             progress_bar=True,
             cwd=notebook_path.parent,
+            iopub_timeout=IOPUB_TIMEOUT_SECONDS,
+            raise_on_iopub_timeout=False,
         )
         return
 
@@ -168,6 +171,8 @@ def run_notebook(notebook_path: Path, *, full: bool = False) -> None:
             kernel_name=KERNEL_NAME,
             progress_bar=True,
             cwd=notebook_path.parent,
+            iopub_timeout=IOPUB_TIMEOUT_SECONDS,
+            raise_on_iopub_timeout=False,
         )
     except Exception:
         LOGGER.error(f"Error running notebook: {notebook_path.name}")
