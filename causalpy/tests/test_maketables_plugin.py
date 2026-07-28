@@ -13,6 +13,8 @@
 #   limitations under the License.
 """Tests for optional maketables plugin hooks on experiment objects."""
 
+from typing import cast
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -23,6 +25,11 @@ import causalpy as cp
 from causalpy.data.simulate_data import (
     generate_piecewise_its_data,
     generate_staggered_did_data,
+)
+from causalpy.experiments.model_adapter import (
+    ModelAdapter,
+    PyMCModelAdapter,
+    SklearnModelAdapter,
 )
 from causalpy.maketables_adapters import (
     PyMCMaketablesAdapter,
@@ -664,12 +671,14 @@ class TestPyMCAdapterFrozenHdiBounds:
             dims=["chain", "draw", "coeffs"],
             coords={"coeffs": ["x"]},
         )
-        # Avoid az.InferenceData / DataTree construction (#1042); only .posterior
-        # is required by the adapter.
+        # The adapter seam needs only a backend that returns posterior draws.
+        backend = _Stub(
+            require_idata=lambda: _Stub(posterior=xr.Dataset({"beta": beta}))
+        )
         stub = _Stub(
             labels=["x"],
             _maketables_hdi_prob=0.8,
-            model=_Stub(idata=_Stub(posterior=xr.Dataset({"beta": beta}))),
+            _model_backend=backend,
         )
 
         table = PyMCMaketablesAdapter().coef_table(stub)
@@ -712,16 +721,28 @@ class TestGetMaketablesHdiProb:
 
 
 class TestGetMaketablesAdapter:
-    def test_unsupported_model_raises(self):
+    def test_dispatches_on_model_adapter_kind(self):
+        pymc_backend = PyMCModelAdapter(cp.pymc_models.LinearRegression())
+        sklearn_backend = SklearnModelAdapter(
+            cp.create_causalpy_compatible_class(LinearRegression(fit_intercept=False))
+        )
+
+        assert isinstance(get_maketables_adapter(pymc_backend), PyMCMaketablesAdapter)
+        assert isinstance(
+            get_maketables_adapter(sklearn_backend), SklearnMaketablesAdapter
+        )
+
+    def test_unsupported_backend_raises(self):
+        unsupported = _Stub(kind="pymc-forecast")
         with pytest.raises(TypeError, match="Unsupported model backend"):
-            get_maketables_adapter("not_a_model")
+            get_maketables_adapter(cast(ModelAdapter, unsupported))
 
 
 class TestSklearnAdapterUnit:
     def test_coef_table_success(self):
         adapter = SklearnMaketablesAdapter()
-        model = _Stub(get_coeffs=lambda: [1.0, 2.0])
-        stub = _Stub(labels=["a", "b"], model=model)
+        backend = _Stub(coefficients=lambda: [1.0, 2.0])
+        stub = _Stub(labels=["a", "b"], _model_backend=backend)
         frame = adapter.coef_table(stub)
         assert list(frame.index) == ["a", "b"]
         assert frame["b"].notna().all()
@@ -764,8 +785,8 @@ class TestSklearnAdapterUnit:
 class TestSklearnAdapterCoefMismatch:
     def test_coef_count_mismatch_raises(self):
         adapter = SklearnMaketablesAdapter()
-        model = _Stub(get_coeffs=lambda: [1.0, 2.0])
-        stub = _Stub(labels=["a", "b", "c"], model=model)
+        backend = _Stub(coefficients=lambda: [1.0, 2.0])
+        stub = _Stub(labels=["a", "b", "c"], _model_backend=backend)
         with pytest.raises(ValueError, match="Coefficient count mismatch"):
             adapter.coef_table(stub)
 

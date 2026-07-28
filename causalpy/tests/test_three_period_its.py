@@ -23,6 +23,7 @@ from unittest.mock import patch
 import numpy as np
 import pandas as pd
 import pytest
+import xarray as xr
 from sklearn.linear_model import LinearRegression
 
 import causalpy as cp
@@ -145,12 +146,8 @@ def test_three_period_pymc_datetime_index(datetime_data, mock_pymc_sample):
     assert isinstance(result.data_intervention, pd.DataFrame)
     assert isinstance(result.data_post_intervention, pd.DataFrame)
 
-    # Check PyMC-specific types
-    import xarray as xr
-
-    assert isinstance(result.intervention_pred, xr.DataTree)
-    assert isinstance(result.post_intervention_pred, xr.DataTree)
-    # For PyMC models, post_impact is always xarray DataArray
+    assert isinstance(result.intervention_pred, xr.DataArray)
+    assert isinstance(result.post_intervention_pred, xr.DataArray)
     assert isinstance(result.intervention_impact, xr.DataArray)
     assert isinstance(result.post_intervention_impact, xr.DataArray)
 
@@ -187,12 +184,8 @@ def test_three_period_pymc_integer_index(integer_data, mock_pymc_sample):
     assert isinstance(result.data_intervention, pd.DataFrame)
     assert isinstance(result.data_post_intervention, pd.DataFrame)
 
-    # Check PyMC-specific types
-    import xarray as xr
-
-    assert isinstance(result.intervention_pred, xr.DataTree)
-    assert isinstance(result.post_intervention_pred, xr.DataTree)
-    # For PyMC models, post_impact is always xarray DataArray
+    assert isinstance(result.intervention_pred, xr.DataArray)
+    assert isinstance(result.post_intervention_pred, xr.DataArray)
     assert isinstance(result.intervention_impact, xr.DataArray)
     assert isinstance(result.post_intervention_impact, xr.DataArray)
 
@@ -229,12 +222,10 @@ def test_three_period_sklearn_datetime_index(datetime_data):
     assert isinstance(result.data_intervention, pd.DataFrame)
     assert isinstance(result.data_post_intervention, pd.DataFrame)
 
-    # Check sklearn-specific types
-    assert isinstance(result.intervention_pred, np.ndarray)
-    assert isinstance(result.post_intervention_pred, np.ndarray)
-    # For sklearn models, post_impact is also xarray DataArray (for consistency)
-    import xarray as xr
-
+    assert isinstance(result.intervention_pred, xr.DataArray)
+    assert isinstance(result.post_intervention_pred, xr.DataArray)
+    assert result.intervention_pred.sizes["chain"] == 1
+    assert result.intervention_pred.sizes["draw"] == 1
     assert isinstance(result.intervention_impact, xr.DataArray)
     assert isinstance(result.post_intervention_impact, xr.DataArray)
 
@@ -271,12 +262,10 @@ def test_three_period_sklearn_integer_index(integer_data):
     assert isinstance(result.data_intervention, pd.DataFrame)
     assert isinstance(result.data_post_intervention, pd.DataFrame)
 
-    # Check sklearn-specific types
-    assert isinstance(result.intervention_pred, np.ndarray)
-    assert isinstance(result.post_intervention_pred, np.ndarray)
-    # For sklearn models, post_impact is also xarray DataArray (for consistency)
-    import xarray as xr
-
+    assert isinstance(result.intervention_pred, xr.DataArray)
+    assert isinstance(result.post_intervention_pred, xr.DataArray)
+    assert result.intervention_pred.sizes["chain"] == 1
+    assert result.intervention_pred.sizes["draw"] == 1
     assert isinstance(result.intervention_impact, xr.DataArray)
     assert isinstance(result.post_intervention_impact, xr.DataArray)
 
@@ -830,20 +819,17 @@ def test_intervention_pred_is_slice_of_post_pred(datetime_data, mock_pymc_sample
         model=cp.pymc_models.LinearRegression(sample_kwargs=sample_kwargs),
     )
 
-    # For PyMC models, intervention_pred is a DataTree.
-    import xarray as xr
+    intervention_mu = result.intervention_pred
+    post_mu = result.post_pred
 
-    assert isinstance(result.intervention_pred, xr.DataTree)
-
-    intervention_mu = result.intervention_pred.posterior_predictive["mu"]
-    post_mu = result.post_pred.posterior_predictive["mu"]
+    # Check that intervention_mu is a subset of post_mu
     intervention_coords = result.data_intervention.index
     post_mu_intervention = post_mu.sel(obs_ind=intervention_coords)
 
     assert intervention_mu.shape == post_mu_intervention.shape
     xr.testing.assert_allclose(intervention_mu, post_mu_intervention)
 
-    post_intervention_mu = result.post_intervention_pred.posterior_predictive["mu"]
+    post_intervention_mu = result.post_intervention_pred
     post_intervention_coords = result.data_post_intervention.index
     xr.testing.assert_allclose(
         post_intervention_mu,
@@ -1062,13 +1048,10 @@ def test_plot_two_period_backward_compatible(datetime_data, mock_pymc_sample):
     assert ax is not None
 
 
-def test_get_plot_data_bayesian_uses_hdi_for_skewed_impacts(monkeypatch):
+def test_get_plot_data_uses_hdi_for_skewed_impacts():
     """Impact columns use HDI bounds rather than equal-tailed quantiles."""
     from types import SimpleNamespace
 
-    import xarray as xr
-
-    from causalpy.experiments import interrupted_time_series as its_module
     from causalpy.experiments.interrupted_time_series import InterruptedTimeSeries
     from causalpy.plot_utils import get_hdi_to_df
 
@@ -1083,35 +1066,25 @@ def test_get_plot_data_bayesian_uses_hdi_for_skewed_impacts(monkeypatch):
             coords={"obs_ind": index},
         )
 
+    def prediction(values, index):
+        return (
+            posterior(values, index)
+            .expand_dims(treated_units=["unit_0"])
+            .transpose("chain", "draw", "obs_ind", "treated_units")
+        )
+
     pre_impact = posterior(rng.exponential(size=(2, 200, 2)), pre_index)
     post_impact = posterior(rng.exponential(size=(2, 200, 2)), post_index)
-    pre_mu = posterior(rng.normal(size=(2, 200, 2)), pre_index)
-    post_mu = posterior(rng.normal(size=(2, 200, 2)), post_index)
-
-    def prediction_idata(mu):
-        return {
-            "posterior_predictive": SimpleNamespace(mu=mu),
-            "extract": mu.stack(sample=("chain", "draw")).transpose(
-                "obs_ind", "sample"
-            ),
-        }
-
-    monkeypatch.setattr(
-        its_module.az,
-        "extract",
-        lambda idata, **kwargs: idata["extract"],
-    )
     result = SimpleNamespace(
-        _model_backend=SimpleNamespace(is_bayesian=True),
         datapre=pd.DataFrame({"y": [0.0, 0.0]}, index=pre_index),
         datapost=pd.DataFrame({"y": [0.0, 0.0]}, index=post_index),
-        pre_pred=prediction_idata(pre_mu),
-        post_pred=prediction_idata(post_mu),
+        pre_pred=prediction(rng.normal(size=(2, 200, 2)), pre_index),
+        post_pred=prediction(rng.normal(size=(2, 200, 2)), post_index),
         pre_impact=pre_impact,
         post_impact=post_impact,
     )
 
-    plot_data = InterruptedTimeSeries.get_plot_data_bayesian(result)
+    plot_data = InterruptedTimeSeries.get_plot_data(result)
     expected = get_hdi_to_df(pre_impact).reindex(pre_index)
     observed = plot_data.loc[
         pre_index, ["impact_hdi_lower_94", "impact_hdi_upper_94"]
@@ -1167,23 +1140,27 @@ def test_comparison_period_summary_uses_frozen_hdi_bounds():
     )
 
 
-def test_bayesian_plot_forwards_ci_prob_to_all_singleton_hdi_markers(monkeypatch):
+def test_plot_forwards_ci_prob_to_all_singleton_hdi_markers(monkeypatch):
     """All singleton overlays use the caller's HDI probability."""
     from types import SimpleNamespace
 
     import matplotlib.pyplot as plt
-    import xarray as xr
 
     from causalpy.experiments import interrupted_time_series as its_module
     from causalpy.experiments.interrupted_time_series import InterruptedTimeSeries
 
-    def draws(obs_ind, offset=0.0):
-        return xr.DataArray(
+    def draws(obs_ind, *, treated_units=False, offset=0.0):
+        samples = xr.DataArray(
             np.arange(6 * len(obs_ind), dtype=float).reshape(2, 3, len(obs_ind))
             + offset,
             dims=["chain", "draw", "obs_ind"],
             coords={"obs_ind": obs_ind},
         )
+        if treated_units:
+            return samples.expand_dims(treated_units=["unit_0"]).transpose(
+                "chain", "draw", "obs_ind", "treated_units"
+            )
+        return samples
 
     def design(obs_ind):
         return xr.Dataset(
@@ -1197,18 +1174,17 @@ def test_bayesian_plot_forwards_ci_prob_to_all_singleton_hdi_markers(monkeypatch
         )
 
     pre_index, post_index = pd.Index([0, 1]), pd.Index([2])
-    pre_mu, post_mu = draws(pre_index), draws(post_index, offset=1.0)
     stub = SimpleNamespace(
         datapre=pd.DataFrame(index=pre_index),
         datapost=pd.DataFrame(index=post_index),
-        pre_pred={"posterior_predictive": SimpleNamespace(mu=pre_mu)},
-        post_pred={"posterior_predictive": SimpleNamespace(mu=post_mu)},
+        pre_pred=draws(pre_index, treated_units=True),
+        post_pred=draws(post_index, treated_units=True, offset=1.0),
         pre_design=design(pre_index),
         post_design=design(post_index),
         pre_impact=draws(pre_index, offset=-1.0),
         post_impact=draws(post_index, offset=-1.0),
         post_impact_cumulative=draws(post_index, offset=-2.0),
-        score=pd.Series(dtype=float),
+        score=pd.Series({"unit_0_r2": 0.0, "unit_0_r2_std": 0.0}),
         treatment_time=2,
         treatment_end_time=None,
     )
@@ -1224,13 +1200,8 @@ def test_bayesian_plot_forwards_ci_prob_to_all_singleton_hdi_markers(monkeypatch
     stub._draw_singleton_hdi_marker = fake_singleton_marker
 
     monkeypatch.setattr(its_module, "plot_posterior_over_x", fake_plot_posterior)
-    monkeypatch.setattr(
-        its_module.az,
-        "extract",
-        lambda *args, **kwargs: post_mu.stack(sample=("chain", "draw")),
-    )
 
-    fig, _ = InterruptedTimeSeries._bayesian_plot(stub, ci_prob=0.8)
+    fig, _ = InterruptedTimeSeries._plot(stub, ci_prob=0.8)
 
     assert probabilities == [0.8, 0.8, 0.8]
     plt.close(fig)
