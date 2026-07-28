@@ -54,6 +54,11 @@ class _StubModelAdapter:
     def fit(self, X: Any, y: Any, *, coords: Any | None = None) -> Any:
         return self.model.fit(X=X, y=y, coords=coords)
 
+    def require_idata(self) -> xr.DataTree:
+        if self.model.idata is None:
+            raise RuntimeError("Model has not been fit yet.")
+        return self.model.idata
+
 
 def _make_experiment_stub(
     *,
@@ -263,20 +268,22 @@ class TestBuildReportingObjects:
 
         stub._build_reporting_objects(sc_all, toy_panel.T_pre, n_chains, n_draws)
 
-        # pre_pred / post_pred are DataTrees with a 'mu' variable in
-        # the posterior_predictive group.
-        assert isinstance(stub.pre_pred, xr.DataTree)
-        assert isinstance(stub.post_pred, xr.DataTree)
-        assert "mu" in stub.pre_pred.posterior_predictive
-        assert "mu" in stub.post_pred.posterior_predictive
-        for prediction, index in (
-            (stub.pre_pred, toy_panel.data.index[: toy_panel.T_pre]),
-            (stub.post_pred, toy_panel.data.index[toy_panel.T_pre :]),
+        # pre_pred / post_pred are canonical prediction DataArrays.
+        for pred, expected_len, index in (
+            (stub.pre_pred, toy_panel.T_pre, toy_panel.data.index[: toy_panel.T_pre]),
+            (
+                stub.post_pred,
+                toy_panel.T - toy_panel.T_pre,
+                toy_panel.data.index[toy_panel.T_pre :],
+            ),
         ):
-            mu = prediction["posterior_predictive"].to_dataset()["mu"]
-            assert mu.dims == ("chain", "draw", "obs_ind", "treated_units")
-            np.testing.assert_array_equal(mu.coords["obs_ind"].values, index.values)
-            assert mu.coords["treated_units"].values.tolist() == toy_panel.treated_units
+            assert isinstance(pred, xr.DataArray)
+            assert pred.dims == ("chain", "draw", "obs_ind", "treated_units")
+            assert pred.shape == (n_chains, n_draws, expected_len, 1)
+            np.testing.assert_array_equal(pred.coords["obs_ind"].values, index.values)
+            assert (
+                pred.coords["treated_units"].values.tolist() == toy_panel.treated_units
+            )
 
         # pre_impact / post_impact are xr.DataArrays with the correct dims.
         for impact, expected_len in (
@@ -370,7 +377,7 @@ class TestErrorBranches:
             treatment_time=toy_panel.treatment_time,
             model=_NoIdataModel(),
         )
-        with pytest.raises(AttributeError, match="failed to produce idata"):
+        with pytest.raises(RuntimeError, match="Model has not been fit"):
             stub.algorithm()
 
 

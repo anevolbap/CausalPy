@@ -25,11 +25,10 @@ from typing import Any, Protocol
 import numpy as np
 import pandas as pd
 import xarray as xr
-from sklearn.base import RegressorMixin
 
 from causalpy._arviz_compat import hdi_bounds
 from causalpy.constants import HDI_PROB
-from causalpy.pymc_models import PyMCModel
+from causalpy.experiments.model_adapter import ModelAdapter
 
 
 class MaketablesAdapter(Protocol):
@@ -185,7 +184,7 @@ def _get_maketables_hdi_prob(experiment: Any) -> float:
 
 def _resolve_pymc_coef_draws(experiment: Any) -> xr.DataArray:
     """Resolve posterior coefficient draws across supported PyMC model families."""
-    posterior = experiment.model.idata.posterior
+    posterior = experiment._model_backend.require_idata().posterior
     labels = list(getattr(experiment, "labels", []))
 
     coef_var_candidates = ("beta", "b", "beta_z")
@@ -333,7 +332,9 @@ class SklearnMaketablesAdapter:
             msg = "Experiment has no coefficient labels for maketables export."
             raise ValueError(msg)
 
-        coeffs = np.asarray(experiment.model.get_coeffs(), dtype=float).reshape(-1)
+        coeffs = np.asarray(
+            experiment._model_backend.coefficients(), dtype=float
+        ).reshape(-1)
         if coeffs.shape[0] != len(labels):
             msg = (
                 f"Coefficient count mismatch for maketables export: "
@@ -398,17 +399,17 @@ class SklearnMaketablesAdapter:
         return keys
 
 
-def get_maketables_adapter(model: Any) -> MaketablesAdapter:
-    """Return the adapter for a model backend.
+def get_maketables_adapter(model_adapter: ModelAdapter) -> MaketablesAdapter:
+    """Return the maketables adapter for a model adapter.
 
     Parameters
     ----------
-    model : Any
-        A PyMC or sklearn model instance.
+    model_adapter : ModelAdapter
+        CausalPy backend adapter.
     """
-    if isinstance(model, PyMCModel):
+    if model_adapter.kind == "pymc":
         return PyMCMaketablesAdapter()
-    if isinstance(model, RegressorMixin):
+    if model_adapter.kind == "sklearn":
         return SklearnMaketablesAdapter()
-    msg = f"Unsupported model backend for maketables export: {type(model)!r}"
+    msg = f"Unsupported model backend for maketables export: {model_adapter.kind!r}"
     raise TypeError(msg)

@@ -20,6 +20,7 @@ import pymc as pm
 import pytest
 import xarray as xr
 
+from causalpy.experiments.model_adapter import PyMCModelAdapter
 from causalpy.pymc_models import LinearRegression, PyMCModel
 
 sample_kwargs = {"tune": 20, "draws": 20, "chains": 2, "cores": 2}
@@ -101,12 +102,15 @@ def test_linear_regression_mu_matches_outcome_scale_impact(rng, mock_pymc_sample
     model.fit(X, y, coords)
     pred = model.predict(X, coords)
 
-    impact = model.calculate_impact(y, pred)
+    adapter_mu = PyMCModelAdapter(model).predict(X, coords=coords)
+    assert adapter_mu.dims == ("chain", "draw", "obs_ind", "treated_units")
+    impact = y - adapter_mu
     mu = pred["posterior_predictive"]["mu"]
-    expected = (y - mu).transpose(..., "obs_ind")
+    expected = y - mu
 
-    xr.testing.assert_allclose(impact, expected)
-    assert impact.dims[-1] == "obs_ind"
+    xr.testing.assert_allclose(
+        impact.transpose(..., "obs_ind"), expected.transpose(..., "obs_ind")
+    )
 
 
 def test_poisson_log_link_mu_is_expected_count(rng, mock_pymc_sample):
@@ -128,8 +132,7 @@ def test_poisson_log_link_mu_is_expected_count(rng, mock_pymc_sample):
 
     mu = pred["posterior_predictive"]["mu"]
     assert float(mu.min()) >= 0.0
-    impact = model.calculate_impact(y, pred)
-    assert impact.dims[-1] == "obs_ind"
+    impact = y - PyMCModelAdapter(model).predict(X, coords=coords)
     # Impact mean should be on the count scale, not the log scale.
     assert abs(float(impact.mean()) - float((y - mu).mean())) < 1e-6
 
@@ -155,8 +158,10 @@ def test_bernoulli_logit_mu_is_probability(rng, mock_pymc_sample):
     mu = pred["posterior_predictive"]["mu"]
     assert float(mu.min()) >= 0.0
     assert float(mu.max()) <= 1.0
-    impact = model.calculate_impact(y, pred)
-    xr.testing.assert_allclose(impact, (y - mu).transpose(..., "obs_ind"))
+    impact = y - PyMCModelAdapter(model).predict(X, coords=coords)
+    xr.testing.assert_allclose(
+        impact.transpose(..., "obs_ind"), (y - mu).transpose(..., "obs_ind")
+    )
 
 
 def test_link_scale_mu_would_mix_units():
@@ -183,7 +188,7 @@ def test_link_scale_mu_would_mix_units():
     assert abs(float(right_impact.mean())) < 1e-10
 
 
-def test_calculate_impact_uses_mu_not_y_hat(rng, mock_pymc_sample):
+def test_impact_uses_mu_not_y_hat(rng, mock_pymc_sample):
     """Impact excludes observation noise by using ``mu`` rather than ``y_hat``."""
     n_obs = 10
     X = _design_matrix(n_obs, rng)
@@ -200,20 +205,18 @@ def test_calculate_impact_uses_mu_not_y_hat(rng, mock_pymc_sample):
     model.fit(X, y, coords)
     pred = model.predict(X, coords)
 
-    impact_from_mu = model.calculate_impact(y, pred)
+    impact_from_mu = y - PyMCModelAdapter(model).predict(X, coords=coords)
     noise_inclusive = y - pred["posterior_predictive"]["y_hat"]
 
     with pytest.raises(AssertionError):
-        xr.testing.assert_allclose(impact_from_mu, noise_inclusive)
+        xr.testing.assert_allclose(
+            impact_from_mu.transpose(..., "obs_ind"),
+            noise_inclusive.transpose(..., "obs_ind"),
+        )
 
 
 def test_predictive_and_counterfactual_datatree_item_access(rng, mock_pymc_sample):
-    """Impact uses ``pred["posterior_predictive"]["mu"]`` with outcome ``obs_ind`` alignment.
-
-    Predictive and counterfactual ``predict()`` results are DataTrees; callers and
-    ``calculate_impact`` must reach ``mu`` via item access and subtract that exact
-    array after aligning ``obs_ind`` to the observed outcome.
-    """
+    """Adapter predictions preserve ``obs_ind`` from DataTree samples."""
     n_obs = 10
     obs_ind = np.arange(100, 100 + n_obs)
     X = xr.DataArray(
@@ -243,12 +246,18 @@ def test_predictive_and_counterfactual_datatree_item_access(rng, mock_pymc_sampl
     np.testing.assert_array_equal(
         mu.coords["obs_ind"].values, X.coords["obs_ind"].values
     )
-    impact = model.calculate_impact(y, pred)
-    mu_aligned = mu.assign_coords(obs_ind=y["obs_ind"])
-    xr.testing.assert_allclose(impact, (y - mu_aligned).transpose(..., "obs_ind"))
+
+    adapter = PyMCModelAdapter(model)
+    adapter_mu = adapter.predict(X, coords=coords)
+    assert adapter_mu.dims == ("chain", "draw", "obs_ind", "treated_units")
+    np.testing.assert_array_equal(
+        adapter_mu.coords["obs_ind"].values, y.coords["obs_ind"].values
+    )
+    impact = y - adapter_mu
     np.testing.assert_array_equal(impact["obs_ind"].values, y["obs_ind"].values)
 
-    # Counterfactual-style predict on a modified design matrix (same obs_ind).
+    # Counterfactual-style predict on a modified design matrix preserves the
+    # same coordinate contract and changes the expected outcome.
     X_cf = X.copy(deep=True)
     X_cf.loc[:, "x1"] = 0.0
     cf_pred = model.predict(X_cf, coords)
@@ -257,8 +266,8 @@ def test_predictive_and_counterfactual_datatree_item_access(rng, mock_pymc_sampl
     np.testing.assert_array_equal(
         cf_mu.coords["obs_ind"].values, X_cf.coords["obs_ind"].values
     )
-    cf_impact = model.calculate_impact(y, cf_pred)
-    cf_mu_aligned = cf_mu.assign_coords(obs_ind=y["obs_ind"])
-    xr.testing.assert_allclose(cf_impact, (y - cf_mu_aligned).transpose(..., "obs_ind"))
-    np.testing.assert_array_equal(cf_impact["obs_ind"].values, y["obs_ind"].values)
-    assert not np.allclose(mu.values, cf_mu.values)
+    adapter_cf_mu = adapter.predict(X_cf, coords=coords)
+    np.testing.assert_array_equal(
+        adapter_cf_mu.coords["obs_ind"].values, y.coords["obs_ind"].values
+    )
+    assert not np.allclose(adapter_mu.values, adapter_cf_mu.values)

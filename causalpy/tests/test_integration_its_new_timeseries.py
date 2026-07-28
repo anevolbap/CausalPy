@@ -222,7 +222,8 @@ def test_state_space_predict_and_score():
 
     score = model.score(X=X_train, y=y_train)
     assert isinstance(score, pd.Series)
-    assert "unit_0_r2" in score
+    assert "unit_0_r2" in score.index
+    assert "unit_0_r2_std" in score.index
 
 
 @pytest.mark.integration

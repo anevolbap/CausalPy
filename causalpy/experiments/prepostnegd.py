@@ -61,6 +61,12 @@ class PrePostNEGD(BaseExperiment):
     **kwargs
         Additional keyword arguments forwarded to :class:`BaseExperiment`.
 
+    Notes
+    -----
+    **Estimate extraction**
+
+    The reported ``causal_impact`` is the posterior coefficient on the treatment-group term, conditional on the pretreatment outcome and any other formula covariates. Treated and untreated prediction curves are also computed for visualization, but they do not determine the reported scalar effect. With the current additive identity-link model, the treatment coefficient equals the corresponding conditional prediction contrast.
+
     Examples
     --------
     >>> import causalpy as cp
@@ -109,8 +115,8 @@ class PrePostNEGD(BaseExperiment):
         super().__init__(model=model)
         self.causal_impact: xr.DataArray
         self.pred_xi: np.ndarray
-        self.pred_untreated: xr.DataTree
-        self.pred_treated: xr.DataTree
+        self.pred_untreated: xr.DataArray
+        self.pred_treated: xr.DataArray
         self.data = data
         self.expt_type = "Pretest/posttest Nonequivalent Group Design"
         self.formula = formula
@@ -145,6 +151,8 @@ class PrePostNEGD(BaseExperiment):
         X = self.design["X"]
         y = self.design["y"]
 
+        # Backend-identity checks are justified here: capability validation
+        # (trust boundary), not statistical dispatch.
         if self._model_backend.is_ols:
             raise NotImplementedError("Not implemented for OLS model")
         if not self._model_backend.is_bayesian:
@@ -156,7 +164,7 @@ class PrePostNEGD(BaseExperiment):
             coords=build_coords(self.labels, X.shape[0]),
         )
 
-        assert self.model.idata is not None
+        idata = self._model_backend.require_idata()
         # Calculate the posterior predictive for the treatment and control for an
         # interpolated set of pretest values
         # get the model predictions of the observed data
@@ -175,7 +183,7 @@ class PrePostNEGD(BaseExperiment):
         (new_x_untreated,) = build_design_matrices(
             [self._x_design_info], x_pred_untreated
         )
-        self.pred_untreated = self.model.predict(X=np.asarray(new_x_untreated))
+        self.pred_untreated = self._model_backend.predict(X=np.asarray(new_x_untreated))
         # treated
         x_pred_treated = pd.DataFrame(
             {
@@ -184,10 +192,10 @@ class PrePostNEGD(BaseExperiment):
             }
         )
         (new_x_treated,) = build_design_matrices([self._x_design_info], x_pred_treated)
-        self.pred_treated = self.model.predict(X=np.asarray(new_x_treated))
+        self.pred_treated = self._model_backend.predict(X=np.asarray(new_x_treated))
 
         # Evaluate causal impact as equal to the treatment effect
-        self.causal_impact = self.model.idata.posterior["beta"].sel(
+        self.causal_impact = idata.posterior["beta"].sel(
             {"coeffs": self._get_treatment_effect_coeff()}
         )
 
@@ -322,7 +330,7 @@ class PrePostNEGD(BaseExperiment):
             figsize=figsize,
         )
 
-    def _bayesian_plot(
+    def _plot(
         self,
         round_to: int | None = None,
         ci_prob: float = HDI_PROB,
@@ -373,7 +381,7 @@ class PrePostNEGD(BaseExperiment):
         # plot posterior predictive of untreated
         h_line, h_patch = plot_posterior_over_x(
             self.pred_xi,
-            self.pred_untreated["posterior_predictive"].mu.isel(treated_units=0),
+            self.pred_untreated.isel(treated_units=0),
             ax=ax[0],
             **style,
             plot_hdi_kwargs={"color": "C0"},
@@ -385,7 +393,7 @@ class PrePostNEGD(BaseExperiment):
         # plot posterior predictive of treated
         h_line, h_patch = plot_posterior_over_x(
             self.pred_xi,
-            self.pred_treated["posterior_predictive"].mu.isel(treated_units=0),
+            self.pred_treated.isel(treated_units=0),
             ax=ax[0],
             **style,
             plot_hdi_kwargs={"color": "C1"},
