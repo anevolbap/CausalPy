@@ -169,3 +169,9 @@ The descriptions above assume standard usage. Always consider what your specific
 | Regression Discontinuity | Local treatment effect at cutoff |
 
 For methods not covered in detail here, including IV, IPW, and ANCOVA, see the respective notebook documentation, {doc}`quasi_dags` for identification, and the {doc}`glossary` for estimand definitions.
+
+## References
+
+:::{bibliography}
+:filter: docname in docnames
+:::
