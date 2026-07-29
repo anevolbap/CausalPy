@@ -31,8 +31,6 @@ API_INDEX_PATH = REPO_ROOT / "docs" / "source" / "api" / "index.md"
 TOP_LEVEL_MODULE = "causalpy"
 
 
-
-
 def _load_ast_introspection():
     path = _SCRIPTS_DIR / "_ast_introspection.py"
     spec = importlib.util.spec_from_file_location("ast_introspection", path)
@@ -128,8 +126,7 @@ def check_top_level_api_docs(api_index: Path = API_INDEX_PATH) -> list[str]:
     top_level_directives = directives.get(TOP_LEVEL_MODULE, [])
     if not top_level_directives:
         return [
-            "  Sphinx API index is missing an ``.. automodule:: causalpy`` "
-            "directive."
+            "  Sphinx API index is missing an ``.. automodule:: causalpy`` directive."
         ]
     if not any("members" in options for options in top_level_directives):
         return [
@@ -221,7 +218,6 @@ def check_exports() -> list[str]:
         )
     errors.extend(check_top_level_exports(package_init))
     errors.extend(check_top_level_api_docs())
-
 
     return errors
 

@@ -53,6 +53,7 @@ class EffectSummary:
     table: pd.DataFrame
     text: str
 
+
 __all__ = ["EffectSummary"]
 
 

@@ -59,7 +59,6 @@ def test_detects_synthetic_did_in_experiment_exports(script_module) -> None:
     assert "SyntheticDifferenceInDifferences" in exp_imports
 
 
-
 def test_detects_unbound_top_level_export(tmp_path: Path, script_module) -> None:
     """Tier 1 ``__all__`` entries must be locally bound."""
     package_init = tmp_path / "__init__.py"
@@ -87,7 +86,6 @@ def test_requires_top_level_sphinx_members(tmp_path: Path, script_module) -> Non
 
     assert len(errors) == 1
     assert ":members:" in errors[0]
-
 
 
 def test_requires_top_level_sphinx_undocumented_members(
