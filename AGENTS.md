@@ -44,7 +44,7 @@ See the [python-environment skill](.agents/skills/python-environment/SKILL.md) f
   - In RST files (`.rst`): Use Sphinx syntax `:term:`glossary term``
 - **Cross-references**: For other cross-references in Markdown files, use MyST role syntax with curly braces (e.g., `{doc}path/to/doc`, `{ref}label-name`)
 - **Citations**: Use `references.bib` for citations, cite sources in example notebooks where possible. Include reference section at bottom of notebooks using `:::{bibliography}` directive with `:filter: docname in docnames`
-- **API documentation**: Auto-generated from docstrings via Sphinx autodoc, no manual API docs needed
+- **API documentation**: Sphinx autodoc generates members from docstrings. `docs/source/api/index.md` is the curated API manifest, not a manual reference; preserve its top-level `causalpy` `automodule` with `:members:`, `:undoc-members:`, and `:imported-members:`. Before promoting an export, follow the four-tier policy in `ARCHITECTURE.md`. `make check-exports` and the `check-public-exports` prek hook statically check Tier 1 bindings and Sphinx wiring; do not use importability or underscore heuristics.
 - **Build**: Use `make html` to build documentation
 - **Doctest**: Use `make doctest` to test that Python examples in doctests work
 - **Notebook validation**: `prek run --all-files` runs `validate-notebooks` to catch invalid nbformat and docs notebook convention errors.
