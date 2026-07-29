@@ -122,7 +122,8 @@ def test_uses_xtensor_api_falls_back_to_code_names(monkeypatch):
 
 def test_state_space_defaults_use_level_trend(monkeypatch):
     """State-space defaults dispatch to the supported pymc-extras trend component."""
-    structural = pytest.importorskip("pymc_extras.statespace.structural")
+    statespace = pytest.importorskip("pymc_extras.statespace")
+    structural = statespace.structural
     calls: list[int] = []
 
     class FakeLevelTrend:
