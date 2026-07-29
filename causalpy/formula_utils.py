@@ -61,11 +61,17 @@ def _normalize_patsy_data(data: pd.DataFrame) -> pd.DataFrame:
     if not string_column_positions:
         return data
 
-    normalized_data = data.copy()
+    string_column_names = [
+        data.columns[position] for position in string_column_positions
+    ]
+    normalized_data = data.astype(
+        {column: object for column in string_column_names}
+    )
     for position in string_column_positions:
         column = normalized_data.iloc[:, position]
-        normalized_column = column.astype(object).where(column.notna(), np.nan)
-        normalized_data.isetitem(position, normalized_column.to_numpy())
+        normalized_data.iloc[:, position] = column.where(
+            column.notna(), np.nan
+        ).to_numpy()
     return normalized_data
 
 
