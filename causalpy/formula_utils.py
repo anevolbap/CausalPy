@@ -24,10 +24,8 @@ from patsy import (
     EvalFactor,
     ModelDesc,
     Term,
-    dmatrices,
-)
-from patsy import (
     build_design_matrices as patsy_build_design_matrices,
+    dmatrices,
 )
 
 from causalpy.transforms import elapsed, ramp, step
