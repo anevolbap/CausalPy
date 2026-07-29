@@ -234,9 +234,19 @@ def test_nhefs_notebook_repro_has_finite_plot_data(
             assert treated_counts[0] > 0
         top_left_edges = np.asarray([patch.get_x() for patch in axs[0].patches])
         top_widths = np.asarray([patch.get_width() for patch in axs[0].patches])
-        np.testing.assert_allclose(np.unique(top_left_edges), bins[:-1])
-        np.testing.assert_allclose(top_widths, np.diff(bins)[0])
-        assert np.isclose((top_left_edges + top_widths).max(), bins[-1])
+        geometry_atol = np.finfo(float).eps
+        np.testing.assert_allclose(
+            np.unique(top_left_edges), bins[:-1], rtol=0, atol=geometry_atol
+        )
+        np.testing.assert_allclose(
+            top_widths, np.diff(bins)[0], rtol=0, atol=geometry_atol
+        )
+        assert np.isclose(
+            (top_left_edges + top_widths).max(),
+            bins[-1],
+            rtol=0,
+            atol=geometry_atol,
+        )
         top_heights = np.asarray([patch.get_height() for patch in axs[0].patches])
         n_bins = len(bins) - 1
         assert top_heights.shape == (10 * 4 * n_bins,)
