@@ -373,8 +373,11 @@ class PanelRegression(BaseExperiment):
         numeric_cols = [
             column
             for column, dtype in data.dtypes.items()
-            if pd.api.types.is_numeric_dtype(dtype)
-            or pd.api.types.is_bool_dtype(dtype)
+            if isinstance(column, str)
+            and (
+                pd.api.types.is_numeric_dtype(dtype)
+                or pd.api.types.is_bool_dtype(dtype)
+            )
         ]
         group_vars_to_exclude = [self.unit_fe_variable]
         if self.time_fe_variable:
@@ -910,18 +913,18 @@ class PanelRegression(BaseExperiment):
                 selected_units = rng.choice(all_units, size=n_sample, replace=False)  # type: ignore[assignment]
             elif select == "extreme":
                 # Select units with the largest and smallest mean outcomes
-                unit_means = self.data.groupby(
-                    self.unit_fe_variable, observed=True
-                )[self.outcome_variable_name].mean()
+                unit_means = self.data.groupby(self.unit_fe_variable, observed=True)[
+                    self.outcome_variable_name
+                ].mean()
                 n_each = max(1, n_sample // 2)
                 top = unit_means.nlargest(n_each).index.tolist()
                 bottom = unit_means.nsmallest(n_sample - n_each).index.tolist()
                 selected_units = top + bottom
             elif select == "high_variance":
                 # Select units with the most within-unit variation
-                unit_var = self.data.groupby(
-                    self.unit_fe_variable, observed=True
-                )[self.outcome_variable_name].var()
+                unit_var = self.data.groupby(self.unit_fe_variable, observed=True)[
+                    self.outcome_variable_name
+                ].var()
                 selected_units = unit_var.nlargest(n_sample).index.tolist()
 
         if len(selected_units) == 0:

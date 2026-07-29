@@ -334,9 +334,7 @@ class StaggeredDifferenceInDifferences(BaseExperiment):
         """Compute event time (t - G) for each observation."""
         # Construct a floating result before adding missing never-treated values:
         # pandas 3 disallows dtype-changing in-place assignment.
-        event_time = (
-            self.data[self.time_variable_name] - self.data["G"]
-        ).astype(float)
+        event_time = (self.data[self.time_variable_name] - self.data["G"]).astype(float)
         self.data["event_time"] = event_time.where(
             self.data["G"] != self.never_treated_value, np.nan
         )
@@ -692,7 +690,9 @@ class StaggeredDifferenceInDifferences(BaseExperiment):
         """
         # --- Group-time ATTs (post-treatment only) ---
         att_gt = (
-            treated_data.groupby(["G", self.time_variable_name], observed=True)["tau_hat"]
+            treated_data.groupby(["G", self.time_variable_name], observed=True)[
+                "tau_hat"
+            ]
             .agg(["mean", "std", "count"])
             .reset_index()
         )
@@ -1226,9 +1226,9 @@ class StaggeredDifferenceInDifferences(BaseExperiment):
             - pretreatment_data["y_hat0"].to_numpy()
         )
         att_gt = (
-            pretreatment_data.groupby(
-                ["G", self.time_variable_name], observed=True
-            )["tau_hat"]
+            pretreatment_data.groupby(["G", self.time_variable_name], observed=True)[
+                "tau_hat"
+            ]
             .agg(["mean", "std", "count"])
             .reset_index()
         )

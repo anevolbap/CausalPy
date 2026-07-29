@@ -24,8 +24,10 @@ from patsy import (
     EvalFactor,
     ModelDesc,
     Term,
-    build_design_matrices as patsy_build_design_matrices,
     dmatrices,
+)
+from patsy import (
+    build_design_matrices as patsy_build_design_matrices,
 )
 
 from causalpy.transforms import elapsed, ramp, step
@@ -54,10 +56,7 @@ def _normalize_patsy_data(data: pd.DataFrame) -> pd.DataFrame:
         position
         for position, dtype in enumerate(data.dtypes)
         if isinstance(dtype, pd.StringDtype)
-        or (
-            isinstance(dtype, pd.ArrowDtype)
-            and pd.api.types.is_string_dtype(dtype)
-        )
+        or (isinstance(dtype, pd.ArrowDtype) and pd.api.types.is_string_dtype(dtype))
     ]
     if not string_column_positions:
         return data
@@ -65,9 +64,8 @@ def _normalize_patsy_data(data: pd.DataFrame) -> pd.DataFrame:
     normalized_data = data.copy()
     for position in string_column_positions:
         column = normalized_data.iloc[:, position]
-        normalized_data.isetitem(
-            position, column.astype(object).where(column.notna(), np.nan)
-        )
+        normalized_column = column.astype(object).where(column.notna(), np.nan)
+        normalized_data.isetitem(position, normalized_column.to_numpy())
     return normalized_data
 
 
@@ -79,6 +77,20 @@ def build_design_matrices(
     This applies the same extension-string normalization as
     :func:`build_formula_matrices`, so predictions using Patsy's fitted
     ``design_info`` remain compatible with pandas 2.3 and 3.
+
+    Parameters
+    ----------
+    design_infos : list[Any]
+        Patsy design information fitted on the training data.
+    data : pd.DataFrame
+        New data used to construct matrices with the fitted design information.
+    **kwargs : Any
+        Keyword arguments forwarded to :func:`patsy.build_design_matrices`.
+
+    Returns
+    -------
+    list[Any]
+        Patsy design matrices corresponding to ``design_infos``.
     """
     return patsy_build_design_matrices(
         design_infos, _normalize_patsy_data(data), **kwargs
