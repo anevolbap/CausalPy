@@ -192,6 +192,22 @@ class InversePropensityWeighting(BaseExperiment):
             )
         return np.clip(ps, eps, 1 - eps)
 
+    @staticmethod
+    def _extract_propensity_draws(idata: xr.DataTree) -> xr.DataArray:
+        """Return posterior propensity draws regardless of ArviZ's container type."""
+        try:
+            extracted = az.extract(idata, var_names="p", combined=True)
+        except KeyError as err:
+            raise KeyError(
+                "Posterior propensity score variable 'p' was not found."
+            ) from err
+        if isinstance(extracted, xr.Dataset):
+            if "p" in extracted:
+                return extracted["p"]
+        elif extracted.name == "p":
+            return extracted
+        raise KeyError("Posterior propensity score variable 'p' was not found.")
+
     def make_robust_adjustments(
         self, ps: np.ndarray
     ) -> tuple[pd.Series, pd.Series, int, int]:
@@ -593,6 +609,7 @@ class InversePropensityWeighting(BaseExperiment):
             idata = self._model_backend.require_idata()
         if method is None:
             method = self.weighting_scheme
+        propensity_draws = self._extract_propensity_draws(idata)
 
         def _plot_weights(bins, top0, top1, ax, color="population"):
             colors_dict = {
@@ -622,8 +639,8 @@ class InversePropensityWeighting(BaseExperiment):
                 for bar in bars:
                     bar.set_edgecolor("black")
 
-        def _make_hists(idata, i, axs, method=method):
-            p_i = self._prepare_ps(az.extract(idata)["p"][:, i].values)
+        def _make_hists(i, axs, method=method):
+            p_i = self._prepare_ps(propensity_draws.isel(sample=i).values)
             if method == "raw":
                 weight0 = 1 / (1 - p_i[self.t.flatten() == 0])
                 weight1 = 1 / (p_i[self.t.flatten() == 1])
@@ -677,7 +694,7 @@ class InversePropensityWeighting(BaseExperiment):
             ["Treatment PS", "Control PS", "Weighted Pseudo Population", "Extreme PS"],
         )
 
-        [_make_hists(idata, i, axs) for i in range(prop_draws)]
+        [_make_hists(i, axs) for i in range(prop_draws)]
         ate_df = pd.DataFrame(
             [self.get_ate(i, idata, method=method) for i in range(ate_draws)],
             columns=["ATE", "Y(1)", "Y(0)"],
@@ -794,7 +811,8 @@ class InversePropensityWeighting(BaseExperiment):
         if weighting_scheme is None:
             weighting_scheme = self.weighting_scheme
 
-        ps = self._prepare_ps(az.extract(idata)["p"].mean(dim="sample").values)
+        propensity_draws = self._extract_propensity_draws(idata)
+        ps = self._prepare_ps(propensity_draws.mean(dim="sample").values)
         X = pd.DataFrame(self.X, columns=self.labels)
         X["ps"] = ps
         t = self.t.flatten()

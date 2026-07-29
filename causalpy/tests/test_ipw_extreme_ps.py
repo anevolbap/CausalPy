@@ -27,6 +27,7 @@ import pytest
 import xarray as xr
 
 import causalpy as cp
+from causalpy.experiments import inverse_propensity_weighting as ipw_experiment
 
 sample_kwargs = {
     "tune": 50,
@@ -85,6 +86,52 @@ def notebook_repro_idata(ipw_result):
     ps[0, :, varying_control] = 0.5 + 0.2 * np.sin(np.linspace(0, np.pi, 500))
     posterior = xr.Dataset({"p": (("chain", "draw", "obs_ind"), ps)})
     return xr.DataTree.from_dict({"posterior": posterior})
+
+
+@pytest.mark.parametrize("container", ["dataset", "dataarray"])
+def test_extract_propensity_draws_normalizes_arviz_containers(
+    ipw_result, notebook_repro_idata, monkeypatch, container
+):
+    """Both ArviZ extraction container forms produce the named propensity draws."""
+    p = notebook_repro_idata.posterior["p"]
+    extracted = p.to_dataset(name="p") if container == "dataset" else p
+
+    def extract(*_args, **kwargs):
+        assert kwargs == {"var_names": "p", "combined": True}
+        return extracted
+
+    monkeypatch.setattr(ipw_experiment.az, "extract", extract)
+    assert ipw_result._extract_propensity_draws(notebook_repro_idata).identical(p)
+
+
+@pytest.mark.parametrize(
+    "extracted",
+    [
+        xr.Dataset({"other": xr.DataArray([0.5], dims="sample")}),
+        xr.DataArray([0.5], dims="sample", name="other"),
+    ],
+)
+def test_extract_propensity_draws_rejects_missing_p(
+    ipw_result, notebook_repro_idata, monkeypatch, extracted
+):
+    """Unexpected ArviZ outputs fail with the same missing-propensity error."""
+    monkeypatch.setattr(
+        ipw_experiment.az, "extract", lambda *_args, **_kwargs: extracted
+    )
+    with pytest.raises(KeyError, match="Posterior propensity score variable 'p'"):
+        ipw_result._extract_propensity_draws(notebook_repro_idata)
+
+
+def test_extract_propensity_draws_normalizes_selection_error(
+    ipw_result, notebook_repro_idata, monkeypatch
+):
+    """ArviZ selection failures use the documented missing-propensity error."""
+    def extract(*_args, **_kwargs):
+        raise KeyError("p")
+
+    monkeypatch.setattr(ipw_experiment.az, "extract", extract)
+    with pytest.raises(KeyError, match="Posterior propensity score variable 'p'"):
+        ipw_result._extract_propensity_draws(notebook_repro_idata)
 
 
 def test_nhefs_notebook_repro_has_finite_plot_data(
@@ -241,6 +288,25 @@ class TestPlotBalanceEcdfExtremeScores:
             "age", idata=extreme_idata, weighting_scheme=scheme
         )
         assert isinstance(fig, plt.Figure)
+        plt.close(fig)
+
+
+@pytest.mark.parametrize("idata_fixture", ["extreme_idata", "notebook_repro_idata"])
+def test_plot_balance_ecdf_extracts_p_from_dataset_or_dataarray(
+    request, ipw_result, idata_fixture
+):
+    """Balance plotting accepts ArviZ's Dataset and single-DataArray extraction forms."""
+    idata = request.getfixturevalue(idata_fixture)
+    with pytest.warns(UserWarning, match="Extreme propensity scores"):
+        fig, axs = ipw_result.plot_balance_ecdf(
+            "age", idata=idata, weighting_scheme="robust"
+        )
+    try:
+        assert sum(len(ax.lines) for ax in axs) == 4
+        assert all(
+            np.isfinite(line.get_ydata()).all() for ax in axs for line in ax.lines
+        )
+    finally:
         plt.close(fig)
 
 
