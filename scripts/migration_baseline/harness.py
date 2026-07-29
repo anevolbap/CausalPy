@@ -462,6 +462,7 @@ def _capture_runtime_provenance(
             "prefix": str(prefix),
             "module_paths": module_paths,
             "causalpy_editable_target": str(editable_target),
+        },
     }
 
 
