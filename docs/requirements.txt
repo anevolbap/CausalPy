@@ -1,2 +1,5 @@
 # This VCS dependency is intentionally docs-only: PyPI rejects direct VCS references in published package metadata.
-pymc-marketing @ git+https://github.com/pymc-labs/pymc-marketing.git@v1.0.0
+# d710dc0 is the immutable merge commit from pymc-marketing #2677, merged into upstream main; it remains reachable after the v1.0.0 ref was deleted.
+pymc-marketing @ git+https://github.com/pymc-labs/pymc-marketing.git@d710dc035b654b96d6abab2087df4f577beb66f1
+# Match the upstream dependency bound explicitly; the expected resolver selection is pymc-extras 0.12.1.
+pymc-extras>=0.11,<0.13
