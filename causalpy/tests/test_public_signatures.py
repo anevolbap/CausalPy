@@ -407,7 +407,7 @@ def test_every_concrete_subclass_declares_effect_summary() -> None:
 def test_representative_cutover_signatures_reject_typos_at_call_time() -> None:
     """Changed concrete API families reject typos before executing their bodies."""
     did = _experiment_class("DifferenceInDifferences")
-    did_instance = object.__new__(did)
+    did_instance: Any = object.__new__(did)
     did_init = cast(Callable[..., Any], did.__dict__["__init__"])
     did_effect_summary = cast(Callable[..., Any], did.__dict__["effect_summary"])
     with pytest.raises(TypeError):

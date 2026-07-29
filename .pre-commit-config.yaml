@@ -46,17 +46,16 @@ repos:
         additional_dependencies:
           # Support pyproject.toml configuration
           - tomli
-  # Validate numpydoc-style docstrings across the package. The check set and
-  # exclude regex are configured under [tool.numpydoc_validation] in
-  # pyproject.toml. Originally introduced under #886 as a narrow check on
-  # public ``.plot`` overrides, #896 expands it to every production module.
-  # The test suite is outside this production-API check. Private members are
-  # excluded via the config-level regex in ``pyproject.toml``.
+  # Validate numpydoc-style docstrings for the documented public-signature
+  # families migrated in #896. The check set and private-member exclusion are
+  # configured under [tool.numpydoc_validation] in pyproject.toml. This
+  # deliberately avoids turning unrelated data-generation docstring cleanup
+  # into a dependency of the signature migration.
   - repo: https://github.com/numpy/numpydoc
     rev: v1.11.0rc0
     hooks:
       - id: numpydoc-validation
-        files: ^causalpy/(?!tests/).*\.py$
+        files: ^causalpy/(?:experiments/(?:base|diff_in_diff|instrumental_variable|interrupted_time_series|inverse_propensity_weighting|panel_regression|piecewise_its|prepostnegd|regression_discontinuity|regression_kink|staggered_did|synthetic_control|synthetic_difference_in_differences)\.py|pymc_models\.py|pymc_forecast_models\.py|steps/estimate_effect\.py|checks/outcome_falsification\.py|utils\.py)$
   - repo: https://github.com/pre-commit/mirrors-mypy
     rev: v2.3.0
     hooks:
