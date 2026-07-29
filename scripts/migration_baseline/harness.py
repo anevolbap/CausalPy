@@ -463,9 +463,7 @@ def _summary_from_draws(draws: Any, az: Any, np: Any, label: str) -> dict[str, f
         "ess_bulk": _finite_scalar(
             az.ess(values, method="bulk"), f"{label} bulk ESS", np
         ),
-        "ess_tail": _finite_scalar(
-            _tail_ess(values, az), f"{label} tail ESS", np
-        ),
+        "ess_tail": _finite_scalar(_tail_ess(values, az), f"{label} tail ESS", np),
         "hdi_lower": _finite_scalar(interval[0], f"{label} HDI lower", np),
         "hdi_upper": _finite_scalar(interval[1], f"{label} HDI upper", np),
     }
