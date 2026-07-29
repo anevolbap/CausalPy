@@ -17,6 +17,8 @@ Record the four artifact paths and SHA-256 fields, the exact CausalPy import pat
 
 Record that each capture used PyMC NUTS with four serialized chains (`cores=1`), 1,000 tuning iterations, 1,000 retained draws, master seed `1048`, target acceptance `0.95`, and a maximum tree depth of `12`. State that `cores=1` was mandatory on local macOS and intentionally retained on all platforms to serialize the chain schedule.
 
+Record the explicit tail-ESS probability pair `(0.05, 0.95)`. It is part of the shared protocol rather than an ArviZ-version default.
+
 ## Evidence validity gate
 
 Report that both independent captures within each stack produced exact same-stack raw-draw digests for every captured metric. Do not compare raw draw digests across stacks.

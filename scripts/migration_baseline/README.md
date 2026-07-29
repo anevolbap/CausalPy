@@ -23,6 +23,7 @@ All counterfactuals are adapter-returned `mu` conditional expected values. The h
 - Sampler: PyMC NUTS, four chains with `cores=1`, 1,000 tuning iterations, 1,000 retained draws, master seed `1048`, target acceptance `0.95`, and maximum tree depth `12`.
 - `cores=1` is intentional on every platform. In particular it is mandatory on local macOS to avoid Accelerate/numba fork failures and to make the chain schedule deterministic.
 - Capture fails before comparison for divergent chains, tree-depth saturation when that statistic is exposed, missing sample statistics, non-finite values, rank R-hat above `1.01`, bulk ESS below `400`, or tail ESS below `400`.
+- Tail ESS uses the explicit legacy probability pair `(0.05, 0.95)` in both environments; an ArviZ API that cannot accept that registered policy invalidates capture.
 - The draw-wise R² formula is the CausalPy formula evaluated independently for every `(chain, draw, treated_unit)`: `var_obs(mu) / (var_obs(mu) + var_obs(y - mu))` with `ddof=0`. The harness keeps its posterior draws long enough to calculate MCSE and convergence diagnostics before it serializes only summaries.
 
 The JSON artifact records the exact CausalPy import path, Git SHA, harness SHA, package versions, platform, sampler configuration, fixture rows and hash, table semantics, coordinate semantics, posterior summaries, diagnostics, and raw-draw digests. It is strict JSON with deterministic key ordering and atomic writes.

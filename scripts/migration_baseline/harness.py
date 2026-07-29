@@ -43,6 +43,7 @@ MAX_TREEDEPTH = 12
 MAX_RHAT = 1.01
 MIN_ESS_BULK = 400.0
 MIN_ESS_TAIL = 400.0
+TAIL_ESS_PROB = (0.05, 0.95)
 
 ABSOLUTE_TOLERANCE_FLOOR = 1e-6
 RELATIVE_TOLERANCE_FLOOR = 1e-4
@@ -325,6 +326,7 @@ def _protocol(supports_nuts_sampler: bool) -> dict[str, Any]:
             "max_rhat": MAX_RHAT,
             "min_ess_bulk": MIN_ESS_BULK,
             "min_ess_tail": MIN_ESS_TAIL,
+            "tail_ess_prob": list(TAIL_ESS_PROB),
             "divergences": 0,
             "reject_tree_depth_saturation_when_exposed": True,
         },
@@ -425,6 +427,17 @@ def _hdi_interval(flattened_draws: Any, az: Any, np: Any) -> Any:
     return np.asarray(az.hdi(flattened_draws, **{keyword: HDI_PROB}), dtype=float)
 
 
+def _tail_ess(draws: Any, az: Any) -> Any:
+    """Calculate tail ESS with one explicit probability policy across ArviZ APIs."""
+    try:
+        return az.ess(draws, method="tail", prob=TAIL_ESS_PROB)
+    except TypeError as error:
+        raise HarnessError(
+            "Installed ArviZ cannot calculate tail ESS with the registered "
+            f"probability pair {TAIL_ESS_PROB!r}"
+        ) from error
+
+
 def _summary_from_draws(draws: Any, az: Any, np: Any, label: str) -> dict[str, float]:
     """Summarize one chain-by-draw scalar with validity diagnostics."""
     values = np.asarray(draws, dtype=float)
@@ -451,7 +464,7 @@ def _summary_from_draws(draws: Any, az: Any, np: Any, label: str) -> dict[str, f
             az.ess(values, method="bulk"), f"{label} bulk ESS", np
         ),
         "ess_tail": _finite_scalar(
-            az.ess(values, method="tail"), f"{label} tail ESS", np
+            _tail_ess(values, az), f"{label} tail ESS", np
         ),
         "hdi_lower": _finite_scalar(interval[0], f"{label} HDI lower", np),
         "hdi_upper": _finite_scalar(interval[1], f"{label} HDI upper", np),
@@ -1128,6 +1141,22 @@ def _validate_artifact(artifact: dict[str, Any]) -> None:
     for key, value in expected_sampling.items():
         if sampling.get(key) != value:
             raise HarnessError(f"Artifact sampling protocol differs at {key!r}")
+    evidence_validity = protocol.get("evidence_validity")
+    if not isinstance(evidence_validity, dict):
+        raise HarnessError("Artifact is missing evidence validity protocol")
+    expected_evidence_validity = {
+        "max_rhat": MAX_RHAT,
+        "min_ess_bulk": MIN_ESS_BULK,
+        "min_ess_tail": MIN_ESS_TAIL,
+        "tail_ess_prob": list(TAIL_ESS_PROB),
+        "divergences": 0,
+        "reject_tree_depth_saturation_when_exposed": True,
+    }
+    for key, value in expected_evidence_validity.items():
+        if evidence_validity.get(key) != value:
+            raise HarnessError(
+                f"Artifact evidence validity protocol differs at {key!r}"
+            )
 
     cases = _case_map(artifact)
     expected_cases = {"difference_in_differences", "synthetic_control"}
@@ -1487,6 +1516,7 @@ def render_report(comparison: dict[str, Any]) -> str:
         f"- Sampling: PyMC NUTS, `{CHAINS}` serialized chains (`cores={CORES}`), `{TUNE}` tune iterations, `{DRAWS}` retained draws, master seed `{MASTER_SEED}`, target acceptance `{TARGET_ACCEPT}`.",
         "- The harness captures a coefficient-based Difference-in-Differences scenario and a simplex-weighted Synthetic Control scenario from fixed serialized input records embedded in each artifact.",
         "- Every captured scalar must be finite, divergence-free, non-tree-depth-saturated when that statistic is exposed, have rank R-hat at most 1.01, and have bulk and tail ESS at least 400 before it is evidence.",
+        f"- Tail ESS uses explicit probabilities `{TAIL_ESS_PROB}` on both stacks.",
         "",
         "## Within-stack deterministic repeatability",
         "",

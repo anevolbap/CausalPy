@@ -192,8 +192,12 @@ def test_pymc5_singleton_effect_is_canonicalized_before_table_binding() -> None:
             return 1.0
 
         @staticmethod
-        def ess(_values, *, method):
-            assert method in {"bulk", "tail"}
+        def ess(_values, *, method, prob=None):
+            if method == "tail":
+                assert prob == harness.TAIL_ESS_PROB
+            else:
+                assert method == "bulk"
+                assert prob is None
             return 800.0
 
     captured = harness._capture_series(
@@ -212,6 +216,35 @@ def test_pymc5_singleton_effect_is_canonicalized_before_table_binding() -> None:
     ).assign_coords(treated_units=["unit_0", "unit_1"])
     with pytest.raises(harness.HarnessError, match="unexpected non-sample"):
         harness._canonical_scalar_effect(multi_unit_effect)
+
+
+def test_tail_ess_probability_is_explicit_across_arviz_api_variants() -> None:
+    """Tail ESS must not inherit a version-dependent default probability."""
+    harness = _load_harness_module()
+    assert harness._protocol(False)["evidence_validity"]["tail_ess_prob"] == [
+        0.05,
+        0.95,
+    ]
+    calls = []
+
+    class ArviZOne:
+        @staticmethod
+        def ess(_draws, *, method, prob):
+            calls.append(("arviz-one", method, prob))
+            return 801.0
+
+    class LegacyArviZ:
+        @staticmethod
+        def ess(_draws, *, method, prob=None):
+            calls.append(("legacy", method, prob))
+            return 802.0
+
+    assert harness._tail_ess(object(), ArviZOne) == 801.0
+    assert harness._tail_ess(object(), LegacyArviZ) == 802.0
+    assert calls == [
+        ("arviz-one", "tail", (0.05, 0.95)),
+        ("legacy", "tail", (0.05, 0.95)),
+    ]
 
 
 def test_capture_rejects_dirty_pinned_checkout_before_import(
