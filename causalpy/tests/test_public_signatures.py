@@ -448,3 +448,57 @@ def test_estimate_effect_validates_missing_constructor_arguments() -> None:
     )
     with pytest.raises(TypeError, match="Invalid constructor arguments"):
         step.validate(PipelineContext(data=pd.DataFrame()))
+
+
+# Floor for the AST inventory that drives every parametrized invariant in this module. The inventory is discovered from ``docs/source/api/index.md`` and the package ``__all__`` exports, so deleting a documentation entry or an export silently shrinks it — and a shrunken inventory makes the parametrized tests below pass by simply not running. Raise this floor when the public surface grows; never lower it to make a failure go away.
+_MINIMUM_PUBLIC_SIGNATURE_COUNT = 200
+
+# Representative members that must always be inventoried: every concrete experiment constructor plus one model, checks, and pipeline member. These pin the inventory's breadth, not just its size, so dropping a whole family (all of ``checks/*``, say) cannot hide behind the count floor.
+_INVENTORY_CANARIES = (
+    "causalpy.experiments.diff_in_diff.DifferenceInDifferences.__init__",
+    "causalpy.experiments.instrumental_variable.InstrumentalVariable.__init__",
+    "causalpy.experiments.interrupted_time_series.InterruptedTimeSeries.__init__",
+    "causalpy.experiments.inverse_propensity_weighting.InversePropensityWeighting.__init__",
+    "causalpy.experiments.panel_regression.PanelRegression.__init__",
+    "causalpy.experiments.piecewise_its.PiecewiseITS.__init__",
+    "causalpy.experiments.prepostnegd.PrePostNEGD.__init__",
+    "causalpy.experiments.regression_discontinuity.RegressionDiscontinuity.__init__",
+    "causalpy.experiments.regression_kink.RegressionKink.__init__",
+    "causalpy.experiments.staggered_did.StaggeredDifferenceInDifferences.__init__",
+    "causalpy.experiments.synthetic_control.SyntheticControl.__init__",
+    "causalpy.experiments.synthetic_difference_in_differences.SyntheticDifferenceInDifferences.__init__",
+    "causalpy.pymc_models.PyMCModel.fit",
+    "causalpy.checks.outcome_falsification.OutcomeFalsification.__init__",
+    "causalpy.checks.placebo_in_time.PlaceboInTime.run",
+    "causalpy.pipeline.Pipeline.__init__",
+    "causalpy.pipeline.Pipeline.run",
+    "causalpy.steps.estimate_effect.EstimateEffect.__init__",
+)
+
+_SCOPE_SHRINK_DIAGNOSTIC = (
+    "The AST survey in scripts/audit_public_signatures.py derives its scope from "
+    "docs/source/api/index.md and the package __all__ exports, so the usual cause is a "
+    "deleted autosummary entry in docs/source/api/index.md or a name dropped from an "
+    "__all__. Restore the documentation/export entry instead of relaxing this test: "
+    "every invariant in this module is parametrized over the inventory and silently "
+    "stops checking anything that falls out of scope."
+)
+
+
+def test_public_signature_inventory_does_not_shrink() -> None:
+    """A shrinking inventory silently disables the parametrized invariants."""
+    assert len(_PUBLIC_SIGNATURES) >= _MINIMUM_PUBLIC_SIGNATURE_COUNT, (
+        f"Public signature inventory collapsed to {len(_PUBLIC_SIGNATURES)} "
+        f"declarations, below the floor of {_MINIMUM_PUBLIC_SIGNATURE_COUNT}. "
+        f"{_SCOPE_SHRINK_DIAGNOSTIC}"
+    )
+
+
+@pytest.mark.parametrize("qualified_name", _INVENTORY_CANARIES)
+def test_public_signature_inventory_covers_canary_members(qualified_name: str) -> None:
+    """Named public members stay inside the audited scope."""
+    inventoried = {candidate.qualified_name for candidate in _PUBLIC_SIGNATURES}
+    assert qualified_name in inventoried, (
+        f"{qualified_name} is no longer in the audited public-signature inventory "
+        f"({len(inventoried)} declarations). {_SCOPE_SHRINK_DIAGNOSTIC}"
+    )

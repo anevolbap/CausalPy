@@ -46,16 +46,13 @@ repos:
         additional_dependencies:
           # Support pyproject.toml configuration
           - tomli
-  # Validate numpydoc-style docstrings for the documented public-signature
-  # families migrated in #896. The check set and private-member exclusion are
-  # configured under [tool.numpydoc_validation] in pyproject.toml. This
-  # deliberately avoids turning unrelated data-generation docstring cleanup
-  # into a dependency of the signature migration.
+  # Validate numpydoc-style docstrings across the package. The check set and exclude regex are configured under [tool.numpydoc_validation] in pyproject.toml. Originally introduced under #886 as a narrow check on public ``.plot`` overrides, the scope was widened under #898 to cover the whole ``causalpy`` package; keep it package-wide, because narrowing ``files`` to a hand-maintained allowlist silently drops validation for every module missing from the list.
+  # The ``files`` pattern below excludes the test suite and the simulated-data helpers in ``causalpy/data/`` (those use the Sphinx ``:param:`` style for didactic clarity and are not part of the public API surface). Private members are excluded via the config-level regex in ``pyproject.toml``.
   - repo: https://github.com/numpy/numpydoc
     rev: v1.11.0rc0
     hooks:
       - id: numpydoc-validation
-        files: ^causalpy/(?:experiments/(?:base|diff_in_diff|instrumental_variable|interrupted_time_series|inverse_propensity_weighting|panel_regression|piecewise_its|prepostnegd|regression_discontinuity|regression_kink|staggered_did|synthetic_control|synthetic_difference_in_differences)\.py|pymc_models\.py|pymc_forecast_models\.py|steps/estimate_effect\.py|checks/outcome_falsification\.py|utils\.py)$
+        files: ^causalpy/(?!tests/|data/).*\.py$
   - repo: https://github.com/pre-commit/mirrors-mypy
     rev: v2.3.0
     hooks:
