@@ -21,10 +21,10 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 from matplotlib import pyplot as plt
-from patsy import ModelDesc, build_design_matrices
+from patsy import ModelDesc
 from sklearn.base import RegressorMixin
 
-from causalpy.formula_utils import build_formula_matrices
+from causalpy.formula_utils import build_design_matrices, build_formula_matrices
 from causalpy.experiments.model_adapter import build_coords
 from causalpy.custom_exceptions import (
     DataException,
@@ -126,6 +126,8 @@ class RegressionDiscontinuity(BaseExperiment):
     ) -> None:
         super().__init__(model=model)
         self.expt_type = "Regression Discontinuity"
+        # Work on an owned frame before normalizing the treated indicator.
+        data = data.copy()
         self.data = data
         self.formula = formula
         self.running_variable_name = running_variable_name
@@ -269,10 +271,9 @@ class RegressionDiscontinuity(BaseExperiment):
                 f"({self.bandwidth}) when bandwidth is finite."
             )
 
-        # Convert integer treated variable to boolean if needed
-        if self.data["treated"].dtype in ["int64", "int32"]:
-            # Make a copy to avoid SettingWithCopyWarning
-            self.data = self.data.copy()
+        # Convert integer treated variables, including pandas nullable integers,
+        # without mutating the caller's DataFrame.
+        if pd.api.types.is_integer_dtype(self.data["treated"]):
             self.data["treated"] = self.data["treated"].astype(bool)
 
     def _is_treated(self, x: np.ndarray | pd.Series) -> np.ndarray:

@@ -132,7 +132,8 @@ class SyntheticDifferenceInDifferences(BaseExperiment):
         **kwargs: dict,
     ) -> None:
         super().__init__(model=model)
-        # rename the index to "obs_ind"
+        # Work on an owned frame before normalizing its index metadata.
+        data = data.copy()
         data.index.name = "obs_ind"
         self.data = data
         self.input_validation(data, treatment_time)
@@ -173,6 +174,8 @@ class SyntheticDifferenceInDifferences(BaseExperiment):
             The time when treatment occurred, should be in reference to the
             data index.
         """
+        if pd.isna(treatment_time):
+            raise BadIndexException("treatment_time must not be missing.")
         if isinstance(data.index, pd.DatetimeIndex) and not isinstance(
             treatment_time, pd.Timestamp
         ):
@@ -184,6 +187,13 @@ class SyntheticDifferenceInDifferences(BaseExperiment):
         ):
             raise BadIndexException(
                 "If data.index is not DatetimeIndex, treatment_time must be pd.Timestamp."  # noqa: E501
+            )
+        if (
+            isinstance(data.index, pd.DatetimeIndex)
+            and data.index.tz != treatment_time.tz  # type: ignore[union-attr]
+        ):
+            raise BadIndexException(
+                "treatment_time timezone must match the data.index timezone."
             )
 
     def _prepare_data(self) -> None:

@@ -66,6 +66,7 @@ jobs:
           echo "environment.yml is in sync with pyproject.toml"
 
   test:
+    name: Test (Python ${{ matrix.python-version }}, pandas ${{ matrix.pandas-version }})
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -75,8 +76,17 @@ jobs:
         shell: bash -el {0}
     strategy:
       matrix:
-        python-version: ["3.12", "3.14"]
-
+        # Exercise the declared pandas floor separately from the pandas 3 line.
+        include:
+          - python-version: "3.12"
+            pandas-version: "3.x"
+            pandas-create-arg: "pandas>=3,<4"
+          - python-version: "3.14"
+            pandas-version: "3.x"
+            pandas-create-arg: "pandas>=3,<4"
+          - python-version: "3.12"
+            pandas-version: "2.3"
+            pandas-create-arg: "pandas>=2.3,<3"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -91,8 +101,7 @@ jobs:
           # test-only ones) come from environment.yml, regenerated from
           # pyproject.toml's `dev` + `test` extras via pyproject2conda.
           create-args: >-
-            python=${{ matrix.python-version }}
-          cache-environment: true
+            python=${{ matrix.python-version }} ${{ matrix.pandas-create-arg }}
       - name: Install package
         # --no-deps so pip does not pull pip-built pymc/pytensor on top of the
         # conda-forge ones. Runtime deps come from environment.yml.

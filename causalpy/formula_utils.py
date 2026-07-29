@@ -17,8 +17,16 @@ from __future__ import annotations
 
 from typing import Any
 
+import numpy as np
 import pandas as pd
-from patsy import EvalEnvironment, EvalFactor, ModelDesc, Term, dmatrices
+from patsy import (
+    EvalEnvironment,
+    EvalFactor,
+    ModelDesc,
+    Term,
+    build_design_matrices as patsy_build_design_matrices,
+    dmatrices,
+)
 
 from causalpy.transforms import elapsed, ramp, step
 
@@ -31,6 +39,50 @@ def _datetime_columns(data: pd.DataFrame) -> set[str]:
         if isinstance(column, str)
         and pd.api.types.is_datetime64_any_dtype(data[column])
     }
+
+
+def _normalize_patsy_data(data: pd.DataFrame) -> pd.DataFrame:
+    """Convert only pandas extension-string columns to Patsy-compatible objects.
+
+    Pandas 3 infers its dedicated ``StringDtype`` for string columns. Patsy #206
+    historically could not interpret that dtype, particularly for Arrow-backed
+    strings. Convert extension strings on an owned frame while leaving categorical,
+    numeric, object, and datetime columns unchanged. Missing string values remain
+    missing as ``np.nan``, which Patsy's NA handling recognizes.
+    """
+    string_column_positions = [
+        position
+        for position, dtype in enumerate(data.dtypes)
+        if isinstance(dtype, pd.StringDtype)
+        or (
+            isinstance(dtype, pd.ArrowDtype)
+            and pd.api.types.is_string_dtype(dtype)
+        )
+    ]
+    if not string_column_positions:
+        return data
+
+    normalized_data = data.copy()
+    for position in string_column_positions:
+        column = normalized_data.iloc[:, position]
+        normalized_data.isetitem(
+            position, column.astype(object).where(column.notna(), np.nan)
+        )
+    return normalized_data
+
+
+def build_design_matrices(
+    design_infos: list[Any], data: pd.DataFrame, **kwargs: Any
+) -> list[Any]:
+    """Build Patsy matrices from fitted design information.
+
+    This applies the same extension-string normalization as
+    :func:`build_formula_matrices`, so predictions using Patsy's fitted
+    ``design_info`` remain compatible with pandas 2.3 and 3.
+    """
+    return patsy_build_design_matrices(
+        design_infos, _normalize_patsy_data(data), **kwargs
+    )
 
 
 def _rewrite_datetime_terms(
@@ -90,12 +142,13 @@ def build_formula_matrices(
     **kwargs : Any
         Keyword arguments forwarded to :func:`patsy.dmatrices`.
     """
+    data_for_patsy = _normalize_patsy_data(data)
     eval_env = EvalEnvironment.capture(1).with_outer_namespace(
         {"elapsed": elapsed, "ramp": ramp, "step": step}
     )
     return dmatrices(
-        datetime_continuous_formula(formula, data),
-        data,
+        datetime_continuous_formula(formula, data_for_patsy),
+        data_for_patsy,
         eval_env=eval_env,
         **kwargs,
     )

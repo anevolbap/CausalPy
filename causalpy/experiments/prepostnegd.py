@@ -21,14 +21,13 @@ import pandas as pd
 import seaborn as sns
 import xarray as xr
 from matplotlib import pyplot as plt
-from patsy import build_design_matrices
 
 from causalpy.constants import HDI_PROB, LEGEND_FONT_SIZE
 from causalpy.custom_exceptions import (
     DataException,
 )
 from causalpy.experiments.model_adapter import build_coords
-from causalpy.formula_utils import build_formula_matrices
+from causalpy.formula_utils import build_design_matrices, build_formula_matrices
 from causalpy.plot_utils import (
     _PosteriorPlotStyle,
     plot_posterior_over_x,
