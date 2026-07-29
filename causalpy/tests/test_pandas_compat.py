@@ -236,6 +236,12 @@ def test_interrupted_time_series_predicts_with_string_extension_covariates():
 
     assert result.pre_design["X"].sizes["obs_ind"] == 6
     assert result.post_design["X"].sizes["obs_ind"] == 6
+    assert result.pre_design.indexes["obs_ind"].equals(
+        result.pre_pred.indexes["obs_ind"]
+    )
+    assert result.post_design.indexes["obs_ind"].equals(
+        result.post_pred.indexes["obs_ind"]
+    )
     pd.testing.assert_frame_equal(data, original)
 
 
@@ -258,6 +264,12 @@ def test_interrupted_time_series_preserves_timezone_aware_boundary_and_input():
 
     assert result.datapre.index.max() == dates[5]
     assert result.datapost.index.min() == treatment_time
+    assert result.pre_design.indexes["obs_ind"].equals(
+        result.pre_pred.indexes["obs_ind"]
+    )
+    assert result.post_design.indexes["obs_ind"].equals(
+        result.post_pred.indexes["obs_ind"]
+    )
     pd.testing.assert_frame_equal(data, original)
 
     with pytest.raises(BadIndexException, match="treatment_time must not be missing"):
