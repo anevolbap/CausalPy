@@ -20,13 +20,12 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 from matplotlib import pyplot as plt
-from pymc_extras.prior import Prior
 from sklearn.base import RegressorMixin
 
 from causalpy.constants import HDI_PROB, LEGEND_FONT_SIZE
 from causalpy.custom_exceptions import BadIndexException
 from causalpy.date_utils import _combine_datetime_indices, format_date_axes
-from causalpy.experiments.model_adapter import build_coords
+from causalpy.experiments.model_adapter import PyMCModelAdapter, build_coords
 from causalpy.plot_utils import (
     _PosteriorPlotStyle,
     format_r2_score,
@@ -301,48 +300,38 @@ class SyntheticControl(BaseExperiment):
             }
         )
 
-    def algorithm(self) -> None:
-        """Run the experiment algorithm: fit model, predict, and calculate causal impact."""
-        # Auto-scale the sigma prior if the user didn't customize it.
-        # Triggers only for certain model backends because only these expose
-        # a y_hat prior.
+    def _clone_weighted_sum_fitter_for_opt_out(self) -> bool:
+        """Clone a stock fitter only when a fit must retain its legacy prior."""
         if (
             self.auto_scale_sigma
-            and isinstance(self.model, (WeightedSumFitter, SoftmaxWeightedSumFitter))
-            and (
-                self.model._user_priors is None
-                or "y_hat" not in self.model._user_priors
-            )
+            or type(self.model)
+            not in (WeightedSumFitter, SoftmaxWeightedSumFitter)
+            or "y_hat" in (self.model._user_priors or {})
         ):
-            # Per-unit pre-treatment standard deviation of the treated series, so
-            # each treated unit gets a sigma prior scaled to its own outcome.
-            y_std = self.pre_design["treated"].std(dim="obs_ind", ddof=1)
-            if not np.all(np.isfinite(y_std.values)) or np.any(y_std.values == 0):
-                raise ValueError(
-                    "Cannot auto-scale the sigma prior: the pre-treatment standard "
-                    "deviation of one or more treated units is zero or undefined "
-                    "(e.g. a constant pre-treatment series, or only a single "
-                    "pre-treatment observation). Pass auto_scale_sigma=False or "
-                    "supply an explicit y_hat prior on the model."
-                )
-            self.model.priors["y_hat"] = Prior(
-                "Normal",
-                sigma=Prior(
-                    "Exponential", lam=(2 / y_std).values, dims=["treated_units"]
-                ),
-                dims=["obs_ind", "treated_units"],
-            )
+            return False
+        model = self.model._clone()
+        setattr(model, "_auto_scale_sigma", False)
+        self.model = model
+        self._model_backend = PyMCModelAdapter(model)
+        return True
 
-        # fit the model to the observed (pre-intervention) data
-        self._model_backend.fit(
-            X=self.pre_design["control"],
-            y=self.pre_design["treated"],
-            coords=build_coords(
-                self.control_units,
-                self.datapre.shape[0],
-                treated_units=self.treated_units,
-            ),
-        )
+    def algorithm(self) -> None:
+        """Run the experiment algorithm: fit model, predict, and calculate causal impact."""
+        reset_auto_scale_sigma = self._clone_weighted_sum_fitter_for_opt_out()
+        try:
+            # fit the model to the observed (pre-intervention) data
+            self._model_backend.fit(
+                X=self.pre_design["control"],
+                y=self.pre_design["treated"],
+                coords=build_coords(
+                    self.control_units,
+                    self.datapre.shape[0],
+                    treated_units=self.treated_units,
+                ),
+            )
+        finally:
+            if reset_auto_scale_sigma:
+                delattr(self.model, "_auto_scale_sigma")
 
         # score the goodness of fit to the pre-intervention data
         self.score = self._model_backend.score(

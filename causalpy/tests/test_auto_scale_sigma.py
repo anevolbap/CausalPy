@@ -13,20 +13,22 @@
 #   limitations under the License.
 """Tests for the ``auto_scale_sigma`` feature of :class:`SyntheticControl`.
 
-The feature replaces ``WeightedSumFitter``'s default ``sigma ~ HalfNormal(1)``
-prior with ``sigma ~ Exponential(2/s)``, where *s* is the pre-treatment standard
-deviation of the treated data, computed *per treated unit*.
+The feature replaces the stock fitters' ``sigma ~ HalfNormal(1)`` likelihood
+prior with ``sigma ~ Exponential(2/s)``, where *s* is the pre-treatment
+standard deviation of the treated data, computed *per treated unit*.
 
-These assertions inspect the model's ``y_hat`` prior, which ``algorithm()`` sets
-before fitting, so they rely on ``mock_pymc_sample`` and never need real MCMC.
+The tests use ``mock_pymc_sample`` where model construction is needed and never
+run real MCMC.
 """
 
 import numpy as np
 import pandas as pd
 import pytest
+import xarray as xr
 from pymc_extras.prior import Prior
 
 import causalpy as cp
+from causalpy.experiments.model_adapter import PyMCModelAdapter
 from causalpy.pymc_models import SoftmaxWeightedSumFitter, WeightedSumFitter
 
 sample_kwargs = {"tune": 20, "draws": 20, "chains": 2, "cores": 2, "progressbar": False}
@@ -77,6 +79,22 @@ def _expected_lam(df, treatment_time, treated_units):
     return (2 / pre.std(ddof=1)).values
 
 
+def _pre_treatment_design(df, treatment_time, treated_units):
+    """Return labeled pre-treatment control and treated arrays."""
+    pre = df[df.index < treatment_time]
+    X = xr.DataArray(
+        pre[["a", "b", "c"]].to_numpy(),
+        dims=["obs_ind", "coeffs"],
+        coords={"obs_ind": pre.index, "coeffs": ["a", "b", "c"]},
+    )
+    y = xr.DataArray(
+        pre[treated_units].to_numpy(),
+        dims=["obs_ind", "treated_units"],
+        coords={"obs_ind": pre.index, "treated_units": treated_units},
+    )
+    return X, y
+
+
 @pytest.mark.integration
 @pytest.mark.filterwarnings("ignore::UserWarning")
 @pytest.mark.parametrize("fitter_cls", FITTERS)
@@ -85,19 +103,62 @@ def test_auto_scale_sets_exponential_prior_matching_2_over_s(
 ):
     """After fit, the y_hat sigma prior is Exponential with lam = 2/s."""
     df, tt, treated = _make_data([1.0])
+    model = _fitter(fitter_cls)
     result = cp.SyntheticControl(
         df,
         tt,
         control_units=["a", "b", "c"],
         treated_units=treated,
-        model=_fitter(fitter_cls),
+        model=model,
     )
     sigma = _sigma_prior(result)
     assert sigma.distribution == "Exponential"
     np.testing.assert_allclose(
         np.asarray(sigma.parameters["lam"]), _expected_lam(df, tt, treated)
     )
+    assert result.model is model
 
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("fitter_cls", FITTERS)
+def test_direct_fit_consumes_data_scaled_prior(mock_pymc_sample, fitter_cls):
+    """The fitter-level prior is used when a stock fitter is fit directly."""
+    df, tt, treated = _make_data([1.0])
+    X, y = _pre_treatment_design(df, tt, treated)
+    model = _fitter(fitter_cls)
+    model.fit(
+        X,
+        y,
+        coords={
+            "obs_ind": X.obs_ind.values,
+            "coeffs": X.coeffs.values,
+            "treated_units": y.treated_units.values,
+        },
+    )
+    sigma = model.priors["y_hat"].parameters["sigma"]
+    assert sigma.distribution == "Exponential"
+    np.testing.assert_allclose(
+        np.asarray(sigma.parameters["lam"]), _expected_lam(df, tt, treated)
+    )
+
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("fitter_cls", FITTERS)
+def test_direct_fit_accepts_dimension_only_treated_outcomes(
+    mock_pymc_sample, fitter_cls
+):
+    """Direct fitting supports a treated-units dimension without labels."""
+    df, tt, treated = _make_data([1.0])
+    X, y = _pre_treatment_design(df, tt, treated)
+    y = xr.DataArray(y.values, dims=["obs_ind", "treated_units"])
+    model = _fitter(fitter_cls)
+    model.fit(X, y)
+    sigma = model.priors["y_hat"].parameters["sigma"]
+    np.testing.assert_allclose(
+        np.asarray(sigma.parameters["lam"]), _expected_lam(df, tt, treated)
+    )
 
 @pytest.mark.integration
 @pytest.mark.filterwarnings("ignore::UserWarning")
@@ -105,6 +166,26 @@ def test_auto_scale_sets_exponential_prior_matching_2_over_s(
 def test_auto_scale_false_preserves_halfnormal_default(mock_pymc_sample, fitter_cls):
     """auto_scale_sigma=False leaves the HalfNormal(1) default untouched."""
     df, tt, treated = _make_data([1.0])
+    result = cp.SyntheticControl(
+        df,
+        tt,
+        control_units=["a", "b", "c"],
+        treated_units=treated,
+        model=_fitter(fitter_cls),
+        auto_scale_sigma=False,
+    )
+    sigma = _sigma_prior(result)
+    assert sigma.distribution == "HalfNormal"
+    assert sigma.parameters["sigma"] == 1
+
+
+@pytest.mark.integration
+@pytest.mark.filterwarnings("ignore::UserWarning")
+@pytest.mark.parametrize("fitter_cls", FITTERS)
+def test_auto_scale_false_skips_invalid_default_scale(mock_pymc_sample, fitter_cls):
+    """The legacy opt-out does not reject a constant treated pre-period."""
+    df, tt, treated = _make_data([1.0])
+    df["treated_0"] = 5.0
     result = cp.SyntheticControl(
         df,
         tt,
@@ -137,6 +218,9 @@ def test_user_supplied_y_hat_prior_is_respected(mock_pymc_sample, fitter_cls):
     # Untouched: still the user's HalfNormal(42), not the auto Exponential.
     assert sigma.distribution == "HalfNormal"
     assert sigma.parameters["sigma"] == 42
+    assert model.priors["y_hat"] is custom
+    assert result.model._user_priors == {"y_hat": custom}
+    assert result.model is model
 
 
 @pytest.mark.integration
@@ -162,18 +246,202 @@ def test_multiple_treated_units_get_per_unit_lam(mock_pymc_sample, fitter_cls):
 
 @pytest.mark.integration
 @pytest.mark.filterwarnings("ignore::UserWarning")
-@pytest.mark.filterwarnings("ignore::RuntimeWarning")
 @pytest.mark.parametrize("fitter_cls", FITTERS)
-def test_constant_pre_treatment_series_raises(mock_pymc_sample, fitter_cls):
-    """A zero/undefined per-unit std raises a clear error rather than producing
-    an infinite Exponential rate."""
-    df, tt, treated = _make_data([1.0, 1.0])
-    df["treated_0"] = 5.0  # constant pre-treatment -> std == 0 for this unit
-    with pytest.raises(ValueError, match="auto-scale the sigma prior"):
+def test_reused_model_does_not_carry_auto_scaled_prior_into_opt_out(
+    mock_pymc_sample, fitter_cls
+):
+    """A scaled fit cannot turn a later opt-out fit into an Exponential prior."""
+    first_df, tt, treated = _make_data([1.0])
+    source_model = _fitter(fitter_cls)
+    first = cp.SyntheticControl(
+        first_df,
+        tt,
+        control_units=["a", "b", "c"],
+        treated_units=treated,
+        model=source_model,
+    )
+    second_df, _, _ = _make_data([100.0])
+    second = cp.SyntheticControl(
+        second_df,
+        tt,
+        control_units=["a", "b", "c"],
+        treated_units=treated,
+        model=first.model,
+        auto_scale_sigma=False,
+    )
+    second_sigma = _sigma_prior(second)
+    assert second_sigma.distribution == "HalfNormal"
+    assert second_sigma.parameters["sigma"] == 1
+    assert first.model is source_model
+    assert source_model.priors["y_hat"].parameters["sigma"].distribution == (
+        "Exponential"
+    )
+    assert second.model is not source_model
+    assert source_model._clone().priors["y_hat"].parameters["sigma"].distribution == (
+        "HalfNormal"
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.filterwarnings("ignore::UserWarning")
+@pytest.mark.parametrize("fitter_cls", FITTERS)
+def test_reused_model_recomputes_the_auto_scale(mock_pymc_sample, fitter_cls):
+    """A cloned model derives its next prior from the next treated outcome."""
+    first_df, tt, treated = _make_data([1.0])
+    first = cp.SyntheticControl(
+        first_df,
+        tt,
+        control_units=["a", "b", "c"],
+        treated_units=treated,
+        model=_fitter(fitter_cls),
+    )
+    second_df, _, _ = _make_data([100.0])
+    second = cp.SyntheticControl(
+        second_df,
+        tt,
+        control_units=["a", "b", "c"],
+        treated_units=treated,
+        model=first.model._clone(),
+    )
+    first_lam = np.asarray(_sigma_prior(first).parameters["lam"])
+    second_lam = np.asarray(_sigma_prior(second).parameters["lam"])
+    np.testing.assert_allclose(second_lam, _expected_lam(second_df, tt, treated))
+    assert not np.isclose(first_lam[0], second_lam[0])
+
+
+@pytest.mark.parametrize("fitter_cls", FITTERS)
+@pytest.mark.parametrize(
+    "invalid_kind",
+    ["constant", "single_observation", "nan", "infinite"],
+)
+def test_invalid_treated_outcome_scales_raise_actionable_error(
+    fitter_cls, invalid_kind
+):
+    """Every non-finite or non-positive per-unit scale is rejected before fit."""
+    if invalid_kind == "single_observation":
+        df, tt, treated = _make_data([1.0], n=2, treatment_time=1)
+    else:
+        df, tt, treated = _make_data([1.0, 10.0])
+        if invalid_kind == "constant":
+            df["treated_0"] = 5.0
+        elif invalid_kind == "nan":
+            df.loc[0, "treated_0"] = np.nan
+        else:
+            df.loc[0, "treated_0"] = np.inf
+    X, y = _pre_treatment_design(df, tt, treated)
+    with pytest.raises(ValueError, match="finite and positive") as error:
+        _fitter(fitter_cls).priors_from_data(X, y)
+    assert "treated_1" not in str(error.value)
+    assert "treated_0" in str(error.value)
+
+
+@pytest.mark.parametrize("fitter_cls", FITTERS)
+def test_dimension_only_invalid_scale_uses_index_label(fitter_cls):
+    """Dimension-only outcomes report their generated treated-unit index."""
+    df, tt, treated = _make_data([1.0])
+    X, y = _pre_treatment_design(df, tt, treated)
+    y = xr.DataArray(np.ones_like(y.values), dims=["obs_ind", "treated_units"])
+    with pytest.raises(ValueError, match="finite and positive") as error:
+        _fitter(fitter_cls).priors_from_data(X, y)
+    assert "'0'" in str(error.value)
+
+
+@pytest.mark.parametrize("fitter_cls", FITTERS)
+def test_user_y_hat_prior_bypasses_invalid_scale_calculation(fitter_cls):
+    """An explicit likelihood prior wins before invalid default scales are read."""
+    df, tt, treated = _make_data([1.0])
+    df["treated_0"] = 5.0
+    X, y = _pre_treatment_design(df, tt, treated)
+    custom = Prior(
+        "Normal",
+        sigma=Prior("HalfNormal", sigma=42, dims=["treated_units"]),
+        dims=["obs_ind", "treated_units"],
+    )
+    priors = _fitter(fitter_cls, priors={"y_hat": custom}).priors_from_data(X, y)
+    assert "y_hat" not in priors
+
+
+@pytest.mark.parametrize("fitter_cls", FITTERS)
+def test_subclass_default_y_hat_prior_is_not_auto_overridden(fitter_cls):
+    """Only stock fitter defaults are eligible for automatic scaling."""
+    df, tt, treated = _make_data([1.0])
+    X, y = _pre_treatment_design(df, tt, treated)
+    custom = Prior(
+        "Normal",
+        sigma=Prior("HalfNormal", sigma=42, dims=["treated_units"]),
+        dims=["obs_ind", "treated_units"],
+    )
+    custom_fitter = type(
+        "CustomFitter",
+        (fitter_cls,),
+        {"default_priors": {"y_hat": custom}},
+    )
+    priors = custom_fitter().priors_from_data(X, y)
+    assert "y_hat" not in priors
+
+
+@pytest.mark.parametrize("fitter_cls", FITTERS)
+@pytest.mark.parametrize(
+    ("scale", "raises"),
+    [
+        (np.finfo(float).tiny / 2, True),
+        (np.finfo(float).max, False),
+    ],
+)
+def test_finite_scale_rate_boundaries_are_checked(
+    monkeypatch, fitter_cls, scale, raises
+):
+    """Rate overflow is rejected while the smallest finite rate remains valid."""
+    df, tt, treated = _make_data([1.0])
+    X, y = _pre_treatment_design(df, tt, treated)
+    monkeypatch.setattr(
+        np,
+        "std",
+        lambda *_args, **_kwargs: np.array([scale]),
+    )
+    if raises:
+        with pytest.raises(ValueError, match="finite and positive"):
+            _fitter(fitter_cls).priors_from_data(X, y)
+    else:
+        sigma = _fitter(fitter_cls).priors_from_data(X, y)["y_hat"].parameters[
+            "sigma"
+        ]
+        rate = np.asarray(sigma.parameters["lam"])
+        assert np.all(np.isfinite(rate))
+        assert np.all(rate > 0)
+
+
+@pytest.mark.filterwarnings("ignore::UserWarning")
+@pytest.mark.parametrize("fitter_cls", FITTERS)
+def test_opt_out_cleans_fit_local_policy_after_fit_error(monkeypatch, fitter_cls):
+    """A failed opt-out fit leaves no private policy on either model instance."""
+    df, tt, treated = _make_data([1.0])
+    source_model = _fitter(fitter_cls)
+    clones = []
+    original_clone = fitter_cls._clone
+
+    def capture_clone(self):
+        clone = original_clone(self)
+        clones.append(clone)
+        return clone
+
+    def fail_fit(self, X, y, *, coords=None):
+        raise RuntimeError("fit failed")
+
+    monkeypatch.setattr(fitter_cls, "_clone", capture_clone)
+    monkeypatch.setattr(PyMCModelAdapter, "fit", fail_fit)
+    with pytest.raises(RuntimeError, match="fit failed"):
         cp.SyntheticControl(
             df,
             tt,
             control_units=["a", "b", "c"],
             treated_units=treated,
-            model=_fitter(fitter_cls),
+            model=source_model,
+            auto_scale_sigma=False,
         )
+    assert len(clones) == 1
+    assert "_auto_scale_sigma" not in clones[0].__dict__
+    assert "_auto_scale_sigma" not in source_model.__dict__
+    assert source_model.priors["y_hat"].parameters["sigma"].distribution == (
+        "HalfNormal"
+    )

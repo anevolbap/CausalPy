@@ -403,9 +403,15 @@ class PyMCModel(pm.Model):
         # sample_posterior_predictive() if provided in sample_kwargs.
         random_seed = self.sample_kwargs.get("random_seed", None)
 
-        # Merge priors with precedence: user-specified > data-driven > defaults
-        # Data-driven priors are computed first, then user-specified priors override them
-        self.priors = {**self.priors_from_data(X, y), **self.priors}
+        # Rebuild effective priors for every fit so data-derived priors never
+        # leak into a later fit. User configuration always has final precedence.
+        self.priors = {**self.default_priors, **(self._user_priors or {})}
+        data_priors = self.priors_from_data(X, y)
+        self.priors = {
+            **self.default_priors,
+            **data_priors,
+            **(self._user_priors or {}),
+        }
 
         self.build_model(X, y, coords)
         with self:
@@ -651,17 +657,58 @@ class LinearRegression(PyMCModel):
             self.priors["y_hat"].create_likelihood_variable("y_hat", mu=mu, observed=y)
 
 
+def _data_scaled_y_hat_prior(y: xr.DataArray) -> Prior:
+    """Build a per-treated-unit observation-noise prior from outcome scale."""
+    y_values = np.asarray(
+        y.transpose("obs_ind", "treated_units").values,
+        dtype=float,
+    )
+    treated_units = np.asarray(y.get_index("treated_units"))
+    if y_values.shape[0] < 2:
+        scales = np.full(y_values.shape[1], np.nan)
+    else:
+        with np.errstate(invalid="ignore"):
+            scales = np.std(y_values, axis=0, ddof=1)
+    with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+        rates = 2 / scales
+    invalid = (
+        ~np.isfinite(scales)
+        | (scales <= 0)
+        | ~np.isfinite(rates)
+        | (rates <= 0)
+    )
+    if np.any(invalid):
+        invalid_units = ", ".join(repr(str(unit)) for unit in treated_units[invalid])
+        raise ValueError(
+            "Cannot data-scale the y_hat observation-noise prior: fitted outcome "
+            "standard deviations must be finite and positive for treated unit(s) "
+            f"{invalid_units}. Pass a custom y_hat prior; SyntheticControl callers "
+            "can alternatively use auto_scale_sigma=False to retain HalfNormal(1)."
+        )
+    return Prior(
+        "Normal",
+        sigma=Prior("Exponential", lam=rates, dims=["treated_units"]),
+        dims=["obs_ind", "treated_units"],
+    )
+
+
 class WeightedSumFitter(PyMCModel):
     r"""
     Used for synthetic control experiments.
 
-    Defines the PyMC model:
+    Defines the PyMC model. At fit time, the default observation-noise prior is
+    independently scaled for each treated unit:
 
     .. math::
-        \sigma &\sim \mathrm{HalfNormal}(1) \\
-        \beta &\sim \mathrm{Dirichlet}(1,...,1) \\
+        s_i &= \operatorname{sd}(y_i) \\
+        \sigma_i &\sim \operatorname{Exponential}(2 / s_i) \\
+        \beta &\sim \operatorname{Dirichlet}(1,\ldots,1) \\
         \mu &= X \cdot \beta \\
-        y &\sim \mathrm{Normal}(\mu, \sigma) \\
+        y &\sim \operatorname{Normal}(\mu, \sigma)
+
+    The rate gives :math:`\sigma_i` a prior mean of :math:`s_i / 2`. A custom
+    ``y_hat`` prior takes precedence. ``SyntheticControl`` can retain the legacy
+    ``HalfNormal(1)`` prior for a fit with ``auto_scale_sigma=False``.
 
     Examples
     --------
@@ -698,14 +745,17 @@ class WeightedSumFitter(PyMCModel):
         ),
     }
 
-    def priors_from_data(self, X, y) -> dict[str, Any]:
-        """
-        Set Dirichlet prior for weights based on number of control units.
+    _auto_scale_sigma = True
 
-        For synthetic control models, this method sets the shape parameter of the
-        Dirichlet prior on the control unit weights (`beta`) to be uniform across
-        all available control units. This ensures that all control units have
-        equal prior probability of contributing to the synthetic control.
+    def priors_from_data(self, X, y) -> dict[str, Any]:
+        """Set data-dependent priors for weights and observation noise.
+
+        The Dirichlet weight prior is uniform across available control units. For
+        the stock fitter, the default ``y_hat`` prior uses an independent
+        ``Exponential(lam=2 / s_i)`` noise scale for each treated outcome, where
+        ``s_i`` is its sample standard deviation. A user-provided ``y_hat`` prior
+        takes precedence, and ``SyntheticControl(auto_scale_sigma=False)`` leaves
+        the legacy ``HalfNormal(1)`` prior in place.
 
         Parameters
         ----------
@@ -716,17 +766,21 @@ class WeightedSumFitter(PyMCModel):
 
         Returns
         -------
-        Dict[str, Prior]
-            Dictionary containing:
-
-            - "beta": Dirichlet prior with shape=(1,...,1) for n_control_units
+        dict[str, Prior]
+            Data-dependent ``beta`` and, when enabled, ``y_hat`` priors.
         """
-        n_predictors = X.shape[1]
-        return {
+        priors = {
             "beta": Prior(
-                "Dirichlet", a=np.ones(n_predictors), dims=["treated_units", "coeffs"]
+                "Dirichlet", a=np.ones(X.shape[1]), dims=["treated_units", "coeffs"]
             ),
         }
+        if (
+            type(self) is WeightedSumFitter
+            and self._auto_scale_sigma
+            and "y_hat" not in (self._user_priors or {})
+        ):
+            priors["y_hat"] = _data_scaled_y_hat_prior(y)
+        return priors
 
     def build_model(
         self, X: xr.DataArray, y: xr.DataArray, coords: dict[str, Any] | None
@@ -818,6 +872,12 @@ class SoftmaxWeightedSumFitter(PyMCModel):
         \mu &= X \cdot \beta \\
         y &\sim \mathrm{Normal}(\mu, \sigma_y) \\
 
+    At fit time, the stock fitter assigns each treated outcome an independent
+    observation-noise prior ``Exponential(lam=2 / s_i)``, where ``s_i`` is that
+    outcome's sample standard deviation. A custom ``y_hat`` prior takes
+    precedence. ``SyntheticControl(auto_scale_sigma=False)`` retains the legacy
+    ``HalfNormal(1)`` prior for a fit.
+
     Notes
     -----
     The softmax-Normal parameterization and the Dirichlet prior used by
@@ -877,38 +937,22 @@ class SoftmaxWeightedSumFitter(PyMCModel):
         ),
     }
 
+    _auto_scale_sigma = True
+
     def priors_from_data(self, X, y) -> dict[str, Any]:
-        """
-        Set Normal prior for logit weights based on number of control units.
+        """Set data-dependent priors for logits and observation noise.
 
-        The prior is placed on ``N - 1`` unconstrained logits (the first logit is
-        pinned to zero). The default scale ``sigma=1.0`` provides moderate
-        regularization, equivalent to ``zeta=1.0`` in the frequentist SDiD.
+        The Normal prior on the ``N - 1`` unconstrained logits uses
+        ``sigma=1.0`` by default. For the stock fitter, the default ``y_hat``
+        prior uses an independent ``Exponential(lam=2 / s_i)`` noise scale for
+        each treated outcome, where ``s_i`` is its sample standard deviation. A
+        user-provided ``y_hat`` prior takes precedence, and
+        ``SyntheticControl(auto_scale_sigma=False)`` leaves the legacy
+        ``HalfNormal(1)`` prior in place.
 
-        Unlike :meth:`WeightedSumFitter.priors_from_data`, which must read
-        ``X.shape[1]`` to size the Dirichlet concentration vector, the Normal
-        prior here broadcasts automatically via its ``dims``, so the data shape
-        is not needed.
-
-        To control regularization strength, pass a custom ``beta_raw`` prior::
-
-            # Tighter regularization (more DiD-like, near-uniform weights):
-            model = SoftmaxWeightedSumFitter(
-                priors={
-                    "beta_raw": Prior(
-                        "Normal", mu=0, sigma=0.1, dims=["treated_units", "coeffs_raw"]
-                    )
-                }
-            )
-
-            # Looser regularization (more SC-like, data-driven sparse weights):
-            model = SoftmaxWeightedSumFitter(
-                priors={
-                    "beta_raw": Prior(
-                        "Normal", mu=0, sigma=10, dims=["treated_units", "coeffs_raw"]
-                    )
-                }
-            )
+        Unlike :meth:`WeightedSumFitter.priors_from_data`, the Normal logit prior
+        broadcasts automatically via its ``dims``, so the predictor shape is not
+        needed.
 
         Parameters
         ----------
@@ -920,11 +964,9 @@ class SoftmaxWeightedSumFitter(PyMCModel):
         Returns
         -------
         dict[str, Prior]
-            Dictionary containing:
-
-            - "beta_raw": Normal prior with dims ["treated_units", "coeffs_raw"]
+            Data-dependent ``beta_raw`` and, when enabled, ``y_hat`` priors.
         """
-        return {
+        priors = {
             "beta_raw": Prior(
                 "Normal",
                 mu=0,
@@ -932,6 +974,13 @@ class SoftmaxWeightedSumFitter(PyMCModel):
                 dims=["treated_units", "coeffs_raw"],
             ),
         }
+        if (
+            type(self) is SoftmaxWeightedSumFitter
+            and self._auto_scale_sigma
+            and "y_hat" not in (self._user_priors or {})
+        ):
+            priors["y_hat"] = _data_scaled_y_hat_prior(y)
+        return priors
 
     def build_model(
         self, X: xr.DataArray, y: xr.DataArray, coords: dict[str, Any] | None
