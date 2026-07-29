@@ -12,9 +12,9 @@
 #   See the License for the specific language governing permissions and
 #   limitations under the License.
 """
-Regression tests verifying that ``ci_prob`` (and its deprecated alias
-``hdi_prob``) is wired through Bayesian plot methods so that user-supplied
-values actually change the rendered credible-interval bands.
+Regression tests verifying that ``ci_prob`` is wired through Bayesian plot
+methods so that user-supplied values actually change the rendered
+credible-interval bands.
 
 These tests guard against the regression described in GitHub issue
 `pymc-labs/CausalPy#890`_, where ``result.plot(hdi_prob=...)`` was silently
@@ -23,12 +23,18 @@ swallowed by ``**kwargs`` rather than reaching the underlying
 
 ``hdi_prob`` was the original parameter name. It was renamed to ``ci_prob``
 when ETI support was added (since the parameter controls the *credible interval*
-width, not only HDI). ``hdi_prob`` remains accepted with a ``FutureWarning``.
+width, not only HDI). The deprecated ``hdi_prob`` alias was removed from the
+public experiment ``plot()`` methods in `pymc-labs/CausalPy#984`_; passing it
+now raises ``TypeError``. ``PanelRegression`` and
+``StaggeredDifferenceInDifferences`` are not yet migrated and still take
+``hdi_prob`` as their real parameter name.
 
 .. _pymc-labs/CausalPy#890: https://github.com/pymc-labs/CausalPy/issues/890
+.. _pymc-labs/CausalPy#984: https://github.com/pymc-labs/CausalPy/issues/984
 """
 
 import importlib
+import inspect
 from contextlib import ExitStack
 from typing import Any
 from unittest.mock import patch
@@ -352,6 +358,12 @@ _PIECEWISE_TARGETS: list[_SpyTarget] = [
 _PANEL_TARGETS: list[_SpyTarget] = [
     ("causalpy.experiments.panel_regression.hdi_bound_arrays", "prob"),
 ]
+_SDID_TARGETS: list[_SpyTarget] = [
+    (
+        "causalpy.experiments.synthetic_difference_in_differences.plot_posterior_over_x",
+        "ci_prob",
+    ),
+]
 
 
 @pytest.mark.integration
@@ -458,59 +470,82 @@ def test_panel_plot_default_ci_prob(mock_pymc_sample, fitted_panel):
     _check_default(fitted_panel, _PANEL_TARGETS)
 
 
-# ---------------------------------------------------------------------------
-# Deprecated hdi_prob alias: verify it still works with a FutureWarning.
-# ---------------------------------------------------------------------------
+@pytest.mark.integration
+@pytest.mark.parametrize("ci_prob", _PARAMS)
+def test_sdid_plot_threads_ci_prob(mock_pymc_sample, fitted_sdid, ci_prob):
+    """SDID ``plot(ci_prob=...)`` reaches every ``plot_posterior_over_x`` call."""
+    _check_threading(fitted_sdid, _SDID_TARGETS, ci_prob)
 
 
 @pytest.mark.integration
-def test_deprecated_hdi_prob_still_wired(mock_pymc_sample, fitted_its):
-    """``plot(hdi_prob=...)`` still reaches ``plot_posterior_over_x`` via the deprecated alias.
+def test_sdid_plot_default_ci_prob(mock_pymc_sample, fitted_sdid):
+    """SDID default ``plot()`` forwards ``HDI_PROB`` as ``ci_prob``."""
+    _check_default(fitted_sdid, _SDID_TARGETS)
 
-    Ensures that existing user code does not silently break after the rename
-    to ``ci_prob``. The deprecated alias must emit a ``FutureWarning`` and
-    forward the value to ``plot_posterior_over_x`` as ``ci_prob``.
-    """
-    stack, recorded = _record_hdi_prob_calls(
-        [
-            (
-                "causalpy.experiments.interrupted_time_series.plot_posterior_over_x",
-                "ci_prob",
-            )
-        ]
+
+# ---------------------------------------------------------------------------
+# Removed hdi_prob alias (pymc-labs/CausalPy#984).
+#
+# The deprecated experiment-level ``hdi_prob`` alias is gone from the public
+# ``plot()`` methods of the eight migrated classes. Because those signatures
+# are keyword-only with no ``**kwargs`` escape hatch, passing ``hdi_prob``
+# must now raise ``TypeError`` rather than being silently swallowed. Each
+# case also asserts that ``ci_prob`` still threads through, so a future
+# over-eager removal of the ``ci_prob`` wiring cannot pass these tests.
+# ---------------------------------------------------------------------------
+
+# (experiment class name, fitted fixture name, spy targets)
+_MIGRATED_EXPERIMENTS: list[tuple[str, str, list[_SpyTarget]]] = [
+    ("InterruptedTimeSeries", "fitted_its", _ITS_TARGETS),
+    ("DifferenceInDifferences", "fitted_did", _DID_TARGETS),
+    ("PrePostNEGD", "fitted_prepost", _PREPOST_TARGETS),
+    ("RegressionDiscontinuity", "fitted_rd", _RD_TARGETS),
+    ("RegressionKink", "fitted_rkink", _RKINK_TARGETS),
+    ("SyntheticControl", "fitted_sc", _SC_TARGETS),
+    ("SyntheticDifferenceInDifferences", "fitted_sdid", _SDID_TARGETS),
+    ("PiecewiseITS", "fitted_piecewise", _PIECEWISE_TARGETS),
+]
+
+_MIGRATED_CLASS_NAMES = [name for name, _, _ in _MIGRATED_EXPERIMENTS]
+
+
+def test_migrated_experiments_list_covers_all_eight() -> None:
+    """Guard the coverage list itself against silent shrinkage."""
+    assert len(_MIGRATED_EXPERIMENTS) == 8
+    assert len(set(_MIGRATED_CLASS_NAMES)) == 8
+
+
+@pytest.mark.parametrize("class_name", _MIGRATED_CLASS_NAMES)
+def test_public_plot_has_no_hdi_prob_parameter(class_name: str) -> None:
+    """``plot()`` exposes ``ci_prob`` and no longer declares ``hdi_prob``."""
+    params = inspect.signature(getattr(cp, class_name).plot).parameters
+    assert "hdi_prob" not in params, (
+        f"{class_name}.plot() still declares a deprecated hdi_prob parameter"
     )
-    import warnings
-
-    with stack, warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        fitted_its.plot(hdi_prob=0.75)
-
-    assert any(issubclass(w.category, FutureWarning) for w in caught), (
-        "Expected a FutureWarning when hdi_prob is passed to plot()"
+    assert "ci_prob" in params, f"{class_name}.plot() lost its ci_prob parameter"
+    # No ``**kwargs`` escape hatch that could re-absorb ``hdi_prob`` silently.
+    assert not any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()), (
+        f"{class_name}.plot() must not accept **kwargs"
     )
-    _assert_threads(recorded, 0.75)
 
 
 @pytest.mark.integration
 @pytest.mark.parametrize(
-    "fixture_name",
-    [
-        "fitted_did",
-        "fitted_rd",
-        "fitted_rkink",
-        "fitted_prepost",
-        "fitted_piecewise",
-        "fitted_sc",
-        "fitted_sdid",
-    ],
+    ("fixture_name", "targets"),
+    [(fixture, targets) for _, fixture, targets in _MIGRATED_EXPERIMENTS],
+    ids=_MIGRATED_CLASS_NAMES,
 )
-def test_deprecated_hdi_prob_alias_emits_futurewarning(
-    mock_pymc_sample, request, fixture_name
-):
-    """hdi_prob deprecated alias emits FutureWarning on all migrated experiment classes."""
+def test_removed_hdi_prob_raises_typeerror_and_ci_prob_still_wired(
+    mock_pymc_sample, request, fixture_name: str, targets: list[_SpyTarget]
+) -> None:
+    """``plot(hdi_prob=...)`` raises ``TypeError``; ``plot(ci_prob=...)`` still threads."""
     fitted = request.getfixturevalue(fixture_name)
-    with pytest.warns(FutureWarning, match="hdi_prob is deprecated"):
+
+    with pytest.raises(TypeError, match="hdi_prob"):
         fitted.plot(hdi_prob=0.75)
+
+    # The removal must not have taken the ci_prob wiring with it.
+    _check_threading(fitted, targets, 0.75)
 
 
 # ---------------------------------------------------------------------------

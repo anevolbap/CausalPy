@@ -592,7 +592,6 @@ class SyntheticDifferenceInDifferences(BaseExperiment):
         *,
         round_to: int | None = None,
         ci_prob: float = HDI_PROB,
-        hdi_prob: float | None = None,
         kind: Literal["ribbon", "histogram", "spaghetti"] = "ribbon",
         ci_kind: Literal["hdi", "eti"] = "hdi",
         num_samples: int = 50,
@@ -611,8 +610,6 @@ class SyntheticDifferenceInDifferences(BaseExperiment):
             posterior predictive, causal impact, and cumulative impact bands.
             Must be in ``(0, 1]``. Defaults to
             :data:`~causalpy.constants.HDI_PROB` (currently 0.94).
-        hdi_prob : float, optional
-            Deprecated. Use ``ci_prob`` instead.
         kind : {"ribbon", "histogram", "spaghetti"}, optional
             How posterior uncertainty is rendered via
             :func:`~causalpy.plot_utils.plot_posterior_over_x`. Defaults to ``"ribbon"``.
@@ -643,14 +640,6 @@ class SyntheticDifferenceInDifferences(BaseExperiment):
         ax : numpy.ndarray
             Array of the three :class:`matplotlib.axes.Axes` instances.
         """
-        if hdi_prob is not None:
-            warnings.warn(
-                "hdi_prob is deprecated and will be removed in a future release. "
-                "Use ci_prob instead.",
-                FutureWarning,
-                stacklevel=2,
-            )
-            ci_prob = hdi_prob
         return self._render_plot(
             show=show,
             legend_kwargs=legend_kwargs,
