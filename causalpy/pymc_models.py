@@ -2403,7 +2403,7 @@ class StateSpaceTimeSeries(PyMCModel):
                     "StateSpaceTimeSeries requires pymc-extras when default trend component is used. "
                     "Install it with `conda/mamba/micromamba install -c conda-forge pymc-extras`."
                 ) from err
-            self._trend_component = st.LevelTrendComponent(order=self.level_order)
+            self._trend_component = st.LevelTrend(order=self.level_order)
         return self._trend_component
 
     def _get_seasonality_component(self):

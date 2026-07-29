@@ -20,6 +20,7 @@ import xarray as xr
 
 from causalpy.pymc_models import (
     BayesianBasisExpansionTimeSeries,
+    StateSpaceTimeSeries,
     _call_seasonality_component_apply,
     _call_time_component_apply,
     _uses_xtensor_api,
@@ -117,6 +118,34 @@ def test_uses_xtensor_api_falls_back_to_code_names(monkeypatch):
     monkeypatch.setattr("causalpy.pymc_models.inspect.getsource", raise_oserror)
 
     assert _uses_xtensor_api(fake_transform)
+
+
+def test_state_space_defaults_use_level_trend(monkeypatch):
+    """State-space defaults dispatch to the supported pymc-extras trend component."""
+    structural = pytest.importorskip("pymc_extras.statespace.structural")
+    calls: list[int] = []
+
+    class FakeLevelTrend:
+        def __init__(self, *, order: int) -> None:
+            calls.append(order)
+
+    def legacy_level_trend_component(*args, **kwargs):  # noqa: ANN002, ANN003
+        raise AssertionError("StateSpaceTimeSeries must not use LevelTrendComponent")
+
+    monkeypatch.setattr(structural, "LevelTrend", FakeLevelTrend)
+    monkeypatch.setattr(
+        structural,
+        "LevelTrendComponent",
+        legacy_level_trend_component,
+        raising=False,
+    )
+    model = StateSpaceTimeSeries(level_order=1)
+
+    trend = model._get_trend_component()
+
+    assert type(trend) is FakeLevelTrend
+    assert calls == [model.level_order]
+    assert model._get_trend_component() is trend
 
 
 def test_pymc_marketing_v1_defaults_build_and_sample():
