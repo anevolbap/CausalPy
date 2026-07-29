@@ -126,6 +126,7 @@ def test_extract_propensity_draws_normalizes_selection_error(
     ipw_result, notebook_repro_idata, monkeypatch
 ):
     """ArviZ selection failures use the documented missing-propensity error."""
+
     def extract(*_args, **_kwargs):
         raise KeyError("p")
 
@@ -144,9 +145,7 @@ def test_nhefs_notebook_repro_has_finite_plot_data(
     def record_histogram(a, bins=10, range=None, density=None, weights=None):
         histogram = original_histogram(a, bins, range, density, weights)
         if weights is not None:
-            weighted_histograms.append(
-                (np.asarray(weights), np.asarray(histogram[0]))
-            )
+            weighted_histograms.append((np.asarray(weights), np.asarray(histogram[0])))
         return histogram
 
     monkeypatch.setattr(np, "histogram", record_histogram)
@@ -176,12 +175,12 @@ def test_nhefs_notebook_repro_has_finite_plot_data(
         assert any(
             issubclass(warning.category, UserWarning)
             and "Extreme propensity scores detected" in str(warning.message)
-            and "Capping values to prevent numerical instability" in str(warning.message)
+            and "Capping values to prevent numerical instability"
+            in str(warning.message)
             for warning in caught_warnings
         )
         assert not any(
-            issubclass(warning.category, RuntimeWarning)
-            for warning in caught_warnings
+            issubclass(warning.category, RuntimeWarning) for warning in caught_warnings
         )
         t = ipw_result.t.flatten()
         treated = t == 1
@@ -191,9 +190,9 @@ def test_nhefs_notebook_repro_has_finite_plot_data(
             notebook_repro_idata.posterior["p"].values[0], 1e-6, 1 - 1e-6
         )
         p_of_t = np.mean(t)
-        expected_y1 = (
-            outcome[treated] * p_of_t / clipped_ps[:, treated]
-        ).sum(axis=1) / treated.sum()
+        expected_y1 = (outcome[treated] * p_of_t / clipped_ps[:, treated]).sum(
+            axis=1
+        ) / treated.sum()
         expected_y0 = (
             outcome[controls] * (1 - p_of_t) / (1 - clipped_ps[:, controls])
         ).sum(axis=1) / controls.sum()
