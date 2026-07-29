@@ -601,17 +601,19 @@ class InversePropensityWeighting(BaseExperiment):
             }
 
             ax.axhline(0, c="gray", linewidth=1)
+            bin_widths = np.diff(bins)
+            bin_centers = bins[:-1] + bin_widths / 2
             bars0 = ax.bar(
-                bins[:-1] + 0.025,
+                bin_centers,
                 top0,
-                width=0.04,
+                width=bin_widths,
                 facecolor=colors_dict[color][0],
                 alpha=colors_dict[color][2],
             )
             bars1 = ax.bar(
-                bins[:-1] + 0.025,
+                bin_centers,
                 -top1,
-                width=0.04,
+                width=bin_widths,
                 facecolor=colors_dict[color][1],
                 alpha=colors_dict[color][2],
             )
@@ -634,7 +636,7 @@ class InversePropensityWeighting(BaseExperiment):
                 p_of_t = np.mean(t)
                 weight1 = p_of_t / p_i[t == 1]
                 weight0 = (1 - p_of_t) / (1 - p_i[t == 0])
-            bins = np.arange(0.025, 0.99, 0.005)
+            bins = np.arange(0, 1.005, 0.005)
             top0, _ = np.histogram(p_i[self.t.flatten() == 0], bins=bins)
             top1, _ = np.histogram(p_i[self.t.flatten() == 1], bins=bins)
             _plot_weights(bins, top0, top1, axs[0])

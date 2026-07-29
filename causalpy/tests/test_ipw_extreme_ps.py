@@ -19,6 +19,8 @@ with ValueError when propensity scores include 0.0 or 1.0 due to
 unguarded division.
 """
 
+import warnings
+
 import matplotlib.pyplot as plt
 import numpy as np
 import pytest
@@ -93,27 +95,29 @@ def test_nhefs_notebook_repro_has_finite_plot_data(
     original_histogram = np.histogram
 
     def record_histogram(a, bins=10, range=None, density=None, weights=None):
+        histogram = original_histogram(a, bins, range, density, weights)
         if weights is not None:
-            weighted_histograms.append(np.asarray(weights))
-        return original_histogram(a, bins, range, density, weights)
+            weighted_histograms.append(
+                (np.asarray(weights), np.asarray(histogram[0]))
+            )
+        return histogram
 
     monkeypatch.setattr(np, "histogram", record_histogram)
     plotted_data = {}
+    rendered_bin_counts = {}
     original_axes_hist = plt.Axes.hist
 
     def record_axes_hist(self, x, *args, **kwargs):
+        histogram = original_axes_hist(self, x, *args, **kwargs)
         plotted_data[kwargs["label"]] = np.asarray(x)
-        return original_axes_hist(self, x, *args, **kwargs)
+        rendered_bin_counts[kwargs["label"]] = np.asarray(histogram[0])
+        return histogram
 
     monkeypatch.setattr(plt.Axes, "hist", record_axes_hist)
+    monkeypatch.setattr(ipw_result, "weighting_scheme", "raw")
 
-    with pytest.warns(
-        UserWarning,
-        match=(
-            "Extreme propensity scores detected.*"
-            "Capping values to prevent numerical instability"
-        ),
-    ):
+    with warnings.catch_warnings(record=True) as caught_warnings:
+        warnings.simplefilter("always")
         fig, axs = ipw_result.plot_ate(
             idata=notebook_repro_idata,
             method="robust",
@@ -121,21 +125,97 @@ def test_nhefs_notebook_repro_has_finite_plot_data(
             ate_draws=500,
         )
 
-    assert len(weighted_histograms) == 20
-    assert all(weights.size > 0 for weights in weighted_histograms)
-    assert all(np.isfinite(weights).all() for weights in weighted_histograms)
-    assert set(plotted_data) == {"E(Y(1))", "E(Y(0))", "ATE"}
-    assert all(values.shape == (500,) for values in plotted_data.values())
-    assert all(np.isfinite(values).all() for values in plotted_data.values())
-    assert all(np.ptp(values) > 0 for values in plotted_data.values())
+    try:
+        assert any(
+            issubclass(warning.category, UserWarning)
+            and "Extreme propensity scores detected" in str(warning.message)
+            and "Capping values to prevent numerical instability" in str(warning.message)
+            for warning in caught_warnings
+        )
+        assert not any(
+            issubclass(warning.category, RuntimeWarning)
+            for warning in caught_warnings
+        )
+        t = ipw_result.t.flatten()
+        treated = t == 1
+        controls = t == 0
+        outcome = np.asarray(ipw_result.y).ravel()
+        clipped_ps = np.clip(
+            notebook_repro_idata.posterior["p"].values[0], 1e-6, 1 - 1e-6
+        )
+        p_of_t = np.mean(t)
+        expected_y1 = (
+            outcome[treated] * p_of_t / clipped_ps[:, treated]
+        ).sum(axis=1) / treated.sum()
+        expected_y0 = (
+            outcome[controls] * (1 - p_of_t) / (1 - clipped_ps[:, controls])
+        ).sum(axis=1) / controls.sum()
+        expected_ate = expected_y1 - expected_y0
 
-    top_heights = np.asarray([patch.get_height() for patch in axs[0].patches])
-    ate_bin_heights = np.asarray([patch.get_height() for patch in axs[2].patches])
-    assert np.isfinite(top_heights).all()
-    assert np.any(top_heights > 0)
-    assert np.any(top_heights < 0)
-    assert np.count_nonzero(ate_bin_heights) > 1
-    plt.close(fig)
+        assert len(weighted_histograms) == 20
+        assert all(weights.size > 0 for weights, _ in weighted_histograms)
+        assert all(
+            np.isfinite(values).all()
+            for weights, counts in weighted_histograms
+            for values in (weights, counts)
+        )
+        bins = np.arange(0, 1.005, 0.005)
+        expected_weighted_histograms = []
+        for ps in clipped_ps[:10]:
+            expected_weighted_histograms.extend(
+                [
+                    original_histogram(
+                        ps[controls],
+                        bins=bins,
+                        weights=(1 - p_of_t) / (1 - ps[controls]),
+                    )[0],
+                    original_histogram(
+                        ps[treated],
+                        bins=bins,
+                        weights=p_of_t / ps[treated],
+                    )[0],
+                ]
+            )
+        for (_, counts), expected_counts in zip(
+            weighted_histograms, expected_weighted_histograms, strict=True
+        ):
+            np.testing.assert_allclose(counts, expected_counts)
+        for (_, control_counts), (_, treated_counts) in zip(
+            weighted_histograms[::2], weighted_histograms[1::2], strict=True
+        ):
+            assert control_counts[-1] > 0
+            assert treated_counts[0] > 0
+        top_left_edges = np.asarray([patch.get_x() for patch in axs[0].patches])
+        top_widths = np.asarray([patch.get_width() for patch in axs[0].patches])
+        np.testing.assert_allclose(np.unique(top_left_edges), bins[:-1])
+        np.testing.assert_allclose(top_widths, np.diff(bins)[0])
+        assert np.isclose((top_left_edges + top_widths).max(), bins[-1])
+        top_heights = np.asarray([patch.get_height() for patch in axs[0].patches])
+        n_bins = len(bins) - 1
+        assert top_heights.shape == (10 * 4 * n_bins,)
+        top_heights = top_heights.reshape(10, 4, n_bins)
+        assert np.all(top_heights[:, 0] >= 0)
+        assert np.all(top_heights[:, 1] <= 0)
+        assert np.all(top_heights[:, 2] >= 0)
+        assert np.all(top_heights[:, 3] <= 0)
+        assert np.any(top_heights[:, 2] > 0)
+        assert np.any(top_heights[:, 3] < 0)
+
+        assert set(plotted_data) == {"E(Y(1))", "E(Y(0))", "ATE"}
+        assert all(values.shape == (500,) for values in plotted_data.values())
+        assert all(np.isfinite(values).all() for values in plotted_data.values())
+        np.testing.assert_allclose(plotted_data["E(Y(1))"], expected_y1)
+        np.testing.assert_allclose(plotted_data["E(Y(0))"], expected_y0)
+        np.testing.assert_allclose(plotted_data["ATE"], expected_ate)
+        np.testing.assert_allclose(
+            plotted_data["ATE"],
+            plotted_data["E(Y(1))"] - plotted_data["E(Y(0))"],
+        )
+        assert all(
+            np.count_nonzero(counts) > 1 for counts in rendered_bin_counts.values()
+        )
+    finally:
+        plt.close(fig)
 
 
 class TestPlotAteExtremeScores:
