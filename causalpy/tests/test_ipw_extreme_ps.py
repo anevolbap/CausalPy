@@ -73,11 +73,14 @@ def notebook_repro_idata(ipw_result):
     t = ipw_result.t.flatten()
     treated = np.flatnonzero(t == 1)
     controls = np.flatnonzero(t == 0)
+    outcome = np.asarray(ipw_result.y).ravel()
+    varying_treated = treated[1:][np.argmax(np.abs(outcome[treated[1:]]))]
+    varying_control = controls[1:][np.argmax(np.abs(outcome[controls[1:]]))]
     ps = np.full((1, 500, len(t)), 0.5)
     ps[0, :, treated[0]] = 0.0
     ps[0, :, controls[0]] = 1.0
-    ps[0, :, treated[1]] = np.linspace(0.25, 0.75, 500)
-    ps[0, :, controls[1]] = np.linspace(0.75, 0.25, 500)
+    ps[0, :, varying_treated] = np.linspace(0.25, 0.75, 500)
+    ps[0, :, varying_control] = 0.5 + 0.2 * np.sin(np.linspace(0, np.pi, 500))
     posterior = xr.Dataset({"p": (("chain", "draw", "obs_ind"), ps)})
     return xr.DataTree.from_dict({"posterior": posterior})
 
