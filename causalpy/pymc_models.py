@@ -428,7 +428,6 @@ class PyMCModel(pm.Model):
         X: xr.DataArray,
         coords: dict[str, Any] | None = None,
         out_of_sample: bool | None = False,
-        **kwargs,
     ):
         """
         Predict data given input data `X`.
@@ -446,8 +445,6 @@ class PyMCModel(pm.Model):
         out_of_sample : bool, optional
             Marker for out-of-sample prediction. Reserved for subclasses;
             the base implementation does not act on it.
-        **kwargs
-            Reserved for subclass extensions.
         """
 
         # Ensure random_seed is used in sample_prior_predictive() and
@@ -470,7 +467,7 @@ class PyMCModel(pm.Model):
 
         return pp
 
-    def score(self, X, y, coords: dict[str, Any] | None = None, **kwargs) -> pd.Series:
+    def score(self, X, y, coords: dict[str, Any] | None = None) -> pd.Series:
         """Score the Bayesian :math:`R^2` given inputs ``X`` and outputs ``y``.
 
         Note that the score is based on a comparison of the observed data ``y`` and the
@@ -490,8 +487,6 @@ class PyMCModel(pm.Model):
         coords : dict, optional
             Coordinate names for named dimensions. Forwarded to
             :meth:`predict`; ignored by the base implementation.
-        **kwargs
-            Reserved for subclass extensions.
         """
         mu = self.predict(X)
         mu_data = az.extract(mu, group="posterior_predictive", var_names="mu")
@@ -2230,7 +2225,6 @@ class BayesianBasisExpansionTimeSeries(PyMCModel):
         X: xr.DataArray,
         coords: dict[str, Any] | None = None,
         out_of_sample: bool | None = False,
-        **kwargs: Any,
     ) -> xr.DataTree:
         """
         Predict data given input X.
@@ -2244,9 +2238,6 @@ class BayesianBasisExpansionTimeSeries(PyMCModel):
             Not used, kept for API compatibility.
         out_of_sample : bool, optional
             Not used, kept for API compatibility.
-        **kwargs
-            Reserved for forward-compatibility; not consumed by this
-            implementation.
 
         Returns
         -------
@@ -2274,7 +2265,6 @@ class BayesianBasisExpansionTimeSeries(PyMCModel):
         X: xr.DataArray,
         y: xr.DataArray,
         coords: dict[str, Any] | None = None,
-        **kwargs: Any,
     ) -> pd.Series:
         """Score the Bayesian R^2.
 
@@ -2286,8 +2276,6 @@ class BayesianBasisExpansionTimeSeries(PyMCModel):
             Target variable with dims ["obs_ind", "treated_units"].
         coords : dict, optional
             Not used, kept for API compatibility.
-        **kwargs
-            Forwarded to :meth:`PyMCModel.score`.
 
         Returns
         -------
@@ -2295,7 +2283,7 @@ class BayesianBasisExpansionTimeSeries(PyMCModel):
             R² score and standard deviation for each treated unit.
         """
         # Use base class score method now that we have treated_units dimension
-        return super().score(X, y, coords=coords, **kwargs)
+        return super().score(X, y, coords=coords)
 
 
 class StateSpaceTimeSeries(PyMCModel):
@@ -2644,7 +2632,6 @@ class StateSpaceTimeSeries(PyMCModel):
         X: xr.DataArray | None = None,
         coords: dict[str, Any] | None = None,
         out_of_sample: bool | None = False,
-        **kwargs: Any,
     ) -> xr.DataTree:
         """
         Predict data given input X.
@@ -2659,9 +2646,6 @@ class StateSpaceTimeSeries(PyMCModel):
             Not used directly, datetime extracted from X coordinates.
         out_of_sample : bool, optional
             If True, forecast future values. If False, return in-sample predictions.
-        **kwargs
-            Reserved for forward-compatibility; not consumed by this
-            implementation.
 
         Returns
         -------
@@ -2721,7 +2705,6 @@ class StateSpaceTimeSeries(PyMCModel):
         X: xr.DataArray | None = None,
         y: xr.DataArray | None = None,
         coords: dict[str, Any] | None = None,
-        **kwargs: Any,
     ) -> pd.Series:
         """
         Score the Bayesian R^2 given inputs X and outputs y.
@@ -2734,8 +2717,6 @@ class StateSpaceTimeSeries(PyMCModel):
             Target variable with dims ["obs_ind", "treated_units"].
         coords : dict, optional
             Not used, kept for API compatibility.
-        **kwargs
-            Forwarded to :meth:`PyMCModel.score`.
 
         Returns
         -------
@@ -2743,4 +2724,4 @@ class StateSpaceTimeSeries(PyMCModel):
             R² score and standard deviation for each treated unit.
         """
         # Use base class implementation - X is accepted but not used by predict()
-        return super().score(X, y, coords, **kwargs)
+        return super().score(X, y, coords)

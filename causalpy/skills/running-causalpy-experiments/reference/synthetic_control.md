@@ -12,7 +12,6 @@ cp.SyntheticControl(
     treated_units,
     model=None,
     min_donor_correlation=0.0,
-    **kwargs
 )
 ```
 

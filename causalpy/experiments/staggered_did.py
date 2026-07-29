@@ -77,8 +77,6 @@ class StaggeredDifferenceInDifferences(BaseExperiment):
     reference_event_time : int, optional
         Event-time index associated with plots (reserved for future use).
         Defaults to -1.
-    **kwargs
-        Additional keyword arguments forwarded to :class:`BaseExperiment`.
 
     Attributes
     ----------
@@ -173,10 +171,7 @@ class StaggeredDifferenceInDifferences(BaseExperiment):
         model: PyMCModel | RegressorMixin | None = None,
         event_window: tuple[int, int] | None = None,
         reference_event_time: int = -1,
-        **kwargs: Any,
     ) -> None:
-        # NOTE: kwargs is accepted for API compatibility with other experiment classes
-        # and is intentionally not used inside this constructor.
         super().__init__(model=model)
 
         # Store parameters
@@ -1344,7 +1339,7 @@ class StaggeredDifferenceInDifferences(BaseExperiment):
                 label=label,
             )
 
-    def get_plot_data(self, hdi_prob: float = HDI_PROB) -> pd.DataFrame:
+    def get_plot_data(self, *, hdi_prob: float = HDI_PROB) -> pd.DataFrame:
         """Get event-time plotting data.
 
         Parameters
@@ -1464,7 +1459,6 @@ class StaggeredDifferenceInDifferences(BaseExperiment):
         direction: Literal["increase", "decrease", "two-sided"] = "increase",
         alpha: float = 0.05,
         min_effect: float | None = None,
-        **kwargs: Any,
     ) -> EffectSummary:
         """
         Generate a decision-ready summary of causal effects for Staggered Difference-in-Differences.
@@ -1477,9 +1471,6 @@ class StaggeredDifferenceInDifferences(BaseExperiment):
             Significance level for HDI/CI intervals (1-alpha confidence level).
         min_effect : float, optional
             Region of Practical Equivalence (ROPE) threshold (PyMC only, ignored for OLS).
-        **kwargs
-            Reserved for forward-compatibility; not consumed by this
-            implementation.
 
         Returns
         -------

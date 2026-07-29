@@ -76,8 +76,6 @@ class DifferenceInDifferences(BaseExperiment):
         Defaults to "post_treatment".
     model : PyMCModel or RegressorMixin, optional
         A PyMC model for difference in differences. Defaults to LinearRegression.
-    **kwargs
-        Additional keyword arguments forwarded to :class:`BaseExperiment`.
 
     Notes
     -----
@@ -118,7 +116,6 @@ class DifferenceInDifferences(BaseExperiment):
         group_variable_name: str,
         post_treatment_variable_name: str = "post_treatment",
         model: PyMCModel | RegressorMixin | None = None,
-        **kwargs: Any,
     ) -> None:
         super().__init__(model=model)
         self.causal_impact: xr.DataArray | float | None
@@ -650,7 +647,6 @@ class DifferenceInDifferences(BaseExperiment):
         direction: Literal["increase", "decrease", "two-sided"] = "increase",
         alpha: float = 0.05,
         min_effect: float | None = None,
-        **kwargs: Any,
     ) -> EffectSummary:
         """
         Generate a decision-ready summary of causal effects for Difference-in-Differences.
@@ -665,9 +661,6 @@ class DifferenceInDifferences(BaseExperiment):
         min_effect : float, optional
             Region of Practical Equivalence (ROPE) threshold (ignored for
             point-estimate predictions).
-        **kwargs
-            Reserved for forward-compatibility; not consumed by this
-            implementation.
 
         Returns
         -------

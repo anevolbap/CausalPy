@@ -48,7 +48,7 @@ def test_did(did_data):
     fig, ax = result.plot()
     assert isinstance(fig, plt.Figure)
     assert isinstance(ax, plt.Axes)
-    with pytest.raises(NotImplementedError):
+    with pytest.raises(AttributeError, match="get_plot_data"):
         result.get_plot_data()
 
 
@@ -132,7 +132,7 @@ def test_rd_drinking():
     fig, ax = result.plot()
     assert isinstance(fig, plt.Figure)
     assert isinstance(ax, plt.Axes)
-    with pytest.raises(NotImplementedError):
+    with pytest.raises(AttributeError, match="get_plot_data"):
         result.get_plot_data()
 
 

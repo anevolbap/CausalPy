@@ -78,8 +78,6 @@ class InterruptedTimeSeries(BaseExperiment):
         the analysis assumes a permanent intervention (two-period design).
         **INCLUSIVE**: Observations at exactly ``treatment_end_time`` are included in the
         post-intervention period (uses ``>=`` comparison).
-    **kwargs : dict
-        Additional keyword arguments passed to the model.
 
     Notes
     -----
@@ -156,7 +154,6 @@ class InterruptedTimeSeries(BaseExperiment):
         formula: str,
         model: PyMCModel | RegressorMixin | PyMCForecastModel | None = None,
         treatment_end_time: int | float | pd.Timestamp | None = None,
-        **kwargs: Any,
     ) -> None:
         super().__init__(model=model)
         self.pre_design: xr.Dataset
@@ -891,7 +888,7 @@ class InterruptedTimeSeries(BaseExperiment):
 
         return fig, ax
 
-    def get_plot_data(self, hdi_prob: float = HDI_PROB) -> pd.DataFrame:
+    def get_plot_data(self, *, hdi_prob: float = HDI_PROB) -> pd.DataFrame:
         """
         Recover the data of the experiment along with the prediction and causal impact information.
 
@@ -1135,7 +1132,6 @@ class InterruptedTimeSeries(BaseExperiment):
         treated_unit: str | None = None,
         period: Literal["intervention", "post", "comparison"] | None = None,
         prefix: str = "Post-period",
-        **kwargs: Any,
     ) -> EffectSummary:
         """
         Generate a decision-ready summary of causal effects for Interrupted Time Series.
@@ -1166,9 +1162,6 @@ class InterruptedTimeSeries(BaseExperiment):
         prefix : str, optional
             Prefix for prose generation (e.g., "During intervention", "Post-intervention").
             Defaults to "Post-period".
-        **kwargs
-            Reserved for forward-compatibility; not consumed by this
-            implementation.
 
         Returns
         -------

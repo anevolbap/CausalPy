@@ -60,8 +60,6 @@ class SyntheticControl(BaseExperiment):
         treated unit in the pre-treatment period. Control units below this
         threshold trigger a ``UserWarning``. Defaults to ``0.0`` (warn on
         negatively correlated donors).
-    **kwargs
-        Additional keyword arguments forwarded to :class:`BaseExperiment`.
 
     Notes
     -----
@@ -108,7 +106,6 @@ class SyntheticControl(BaseExperiment):
         treated_units: list[str],
         model: PyMCModel | RegressorMixin | None = None,
         min_donor_correlation: float = 0.0,
-        **kwargs: Any,
     ) -> None:
         super().__init__(model=model)
         # rename the index to "obs_ind"
@@ -723,7 +720,10 @@ class SyntheticControl(BaseExperiment):
         return fig, ax
 
     def get_plot_data(
-        self, hdi_prob: float = HDI_PROB, treated_unit: str | None = None
+        self,
+        *,
+        hdi_prob: float = HDI_PROB,
+        treated_unit: str | None = None,
     ) -> pd.DataFrame:
         """
         Recover the data of the experiment along with the prediction and causal impact information.
@@ -817,7 +817,6 @@ class SyntheticControl(BaseExperiment):
         treated_unit: str | None = None,
         period: Literal["intervention", "post", "comparison"] | None = None,
         prefix: str = "Post-period",
-        **kwargs: Any,
     ) -> EffectSummary:
         """
         Generate a decision-ready summary of causal effects for Synthetic Control.
@@ -847,9 +846,6 @@ class SyntheticControl(BaseExperiment):
             Ignored for Synthetic Control (two-period design only).
         prefix : str, optional
             Prefix for prose generation. Defaults to "Post-period".
-        **kwargs
-            Reserved for forward-compatibility; not consumed by this
-            implementation.
 
         Returns
         -------

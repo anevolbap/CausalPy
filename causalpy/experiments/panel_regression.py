@@ -14,7 +14,7 @@
 """Panel Regression with Fixed Effects."""
 
 import re
-from typing import Any, Literal
+from typing import Any, Literal, NoReturn
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -31,7 +31,6 @@ from causalpy.experiments.model_adapter import build_coords
 from causalpy.formula_utils import build_formula_matrices
 from causalpy.plot_utils import _plot_interval_band
 from causalpy.pymc_models import PyMCModel
-from causalpy.reporting import EffectSummary
 from causalpy.utils import round_num
 
 from .base import BaseExperiment
@@ -69,8 +68,6 @@ class PanelRegression(BaseExperiment):
           but doesn't directly estimate individual unit effects.
     model : PyMCModel or RegressorMixin, optional
         A PyMC (Bayesian) or sklearn (OLS) model. If None, a model must be provided.
-    **kwargs
-        Additional keyword arguments forwarded to :class:`BaseExperiment`.
 
     Attributes
     ----------
@@ -195,7 +192,6 @@ class PanelRegression(BaseExperiment):
         time_fe_variable: str | None = None,
         fe_method: Literal["dummies", "demeaned"] = "dummies",
         model: PyMCModel | RegressorMixin | None = None,
-        **kwargs: dict,
     ) -> None:
         super().__init__(model=model)
 
@@ -455,59 +451,18 @@ class PanelRegression(BaseExperiment):
                 formatted_val = f"{round_num(coefs[idx], rd):>10}"
                 print(f"  {formatted_name}\t{formatted_val}")
 
-    def effect_summary(
-        self,
-        *,
-        window: Literal["post"] | tuple | slice = "post",
-        direction: Literal["increase", "decrease", "two-sided"] = "increase",
-        alpha: float = 0.05,
-        cumulative: bool = True,
-        relative: bool = True,
-        min_effect: float | None = None,
-        treated_unit: str | None = None,
-        period: Literal["intervention", "post", "comparison"] | None = None,
-        prefix: str = "Post-period",
-        **kwargs: Any,
-    ) -> EffectSummary:
-        """Generate a decision-ready summary of causal effects.
-
-        .. note::
-            ``effect_summary()`` is not yet implemented for
-            ``PanelRegression``.  Panel fixed-effects models estimate
-            regression coefficients rather than time-varying causal impacts,
-            so the standard ITS/SC-style effect summary does not directly
-            apply.  Use :meth:`summary` for coefficient-level inference.
-
-        Parameters
-        ----------
-        window : str, tuple, or slice, default "post"
-            Time window for analysis (placeholder; not consumed).
-        direction : {"increase", "decrease", "two-sided"}, default "increase"
-            Direction for tail probability calculation.
-        alpha : float, default 0.05
-            Significance level for HDI/CI intervals.
-        cumulative : bool, default True
-            Whether to include cumulative effect statistics.
-        relative : bool, default True
-            Whether to include relative effect statistics.
-        min_effect : float, optional
-            Region of Practical Equivalence (ROPE) threshold.
-        treated_unit : str, optional
-            Treated unit selector for multi-unit experiments.
-        period : {"intervention", "post", "comparison"}, optional
-            Period selector for three-period designs.
-        prefix : str, default "Post-period"
-            Prefix for prose generation.
-        **kwargs
-            Reserved for forward-compatibility.
+    def effect_summary(self) -> NoReturn:
+        """Raise because panel regression has no unified effect summary.
 
         Raises
         ------
         NotImplementedError
-            Always raised; this method is a placeholder for future work.
+            Panel fixed-effects models estimate coefficients rather than
+            time-varying causal impacts. Use :meth:`summary` for
+            coefficient-level inference.
         """
         raise NotImplementedError(
-            "effect_summary() is not yet implemented for PanelRegression. "
+            "effect_summary() is not implemented for PanelRegression. "
             "Panel fixed-effects models estimate regression coefficients rather "
             "than time-varying causal impacts. Use summary() for coefficient-level "
             "inference."
@@ -649,17 +604,12 @@ class PanelRegression(BaseExperiment):
         plt.tight_layout()
         return fig, ax
 
-    def get_plot_data(self, **kwargs: Any) -> pd.DataFrame:
+    def get_plot_data(self) -> pd.DataFrame:
         """Get plot data with fitted values.
 
         Bayesian models additionally return ``y_fitted_lower`` /
         ``y_fitted_upper`` 95% credible-interval columns.
 
-        Parameters
-        ----------
-        **kwargs
-            Reserved for forward-compatibility; not consumed by this
-            implementation.
 
         Returns
         -------
