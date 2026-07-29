@@ -24,8 +24,10 @@ from patsy import (
     EvalFactor,
     ModelDesc,
     Term,
-    build_design_matrices as patsy_build_design_matrices,
     dmatrices,
+)
+from patsy import (
+    build_design_matrices as patsy_build_design_matrices,
 )
 
 from causalpy.transforms import elapsed, ramp, step
@@ -62,9 +64,7 @@ def _normalize_patsy_data(data: pd.DataFrame) -> pd.DataFrame:
     string_column_names = [
         data.columns[position] for position in string_column_positions
     ]
-    normalized_data = data.astype(
-        {column: object for column in string_column_names}
-    )
+    normalized_data = data.astype(dict.fromkeys(string_column_names, object))
     for position in string_column_positions:
         column = normalized_data.iloc[:, position]
         normalized_data.iloc[:, position] = column.where(
