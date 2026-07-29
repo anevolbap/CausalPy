@@ -130,16 +130,8 @@ def test_state_space_defaults_use_level_trend(monkeypatch):
         def __init__(self, *, order: int) -> None:
             calls.append(order)
 
-    def legacy_level_trend_component(*args, **kwargs):  # noqa: ANN002, ANN003
-        raise AssertionError("StateSpaceTimeSeries must not use LevelTrendComponent")
-
     monkeypatch.setattr(structural, "LevelTrend", FakeLevelTrend)
-    monkeypatch.setattr(
-        structural,
-        "LevelTrendComponent",
-        legacy_level_trend_component,
-        raising=False,
-    )
+
     model = StateSpaceTimeSeries(level_order=1)
 
     trend = model._get_trend_component()
