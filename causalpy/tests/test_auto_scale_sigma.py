@@ -119,7 +119,6 @@ def test_auto_scale_sets_exponential_prior_matching_2_over_s(
     assert result.model is model
 
 
-
 @pytest.mark.integration
 @pytest.mark.parametrize("fitter_cls", FITTERS)
 def test_direct_fit_consumes_data_scaled_prior(mock_pymc_sample, fitter_cls):
@@ -143,7 +142,6 @@ def test_direct_fit_consumes_data_scaled_prior(mock_pymc_sample, fitter_cls):
     )
 
 
-
 @pytest.mark.integration
 @pytest.mark.parametrize("fitter_cls", FITTERS)
 def test_direct_fit_accepts_dimension_only_treated_outcomes(
@@ -159,6 +157,7 @@ def test_direct_fit_accepts_dimension_only_treated_outcomes(
     np.testing.assert_allclose(
         np.asarray(sigma.parameters["lam"]), _expected_lam(df, tt, treated)
     )
+
 
 @pytest.mark.integration
 @pytest.mark.filterwarnings("ignore::UserWarning")
@@ -403,9 +402,7 @@ def test_finite_scale_rate_boundaries_are_checked(
         with pytest.raises(ValueError, match="finite and positive"):
             _fitter(fitter_cls).priors_from_data(X, y)
     else:
-        sigma = _fitter(fitter_cls).priors_from_data(X, y)["y_hat"].parameters[
-            "sigma"
-        ]
+        sigma = _fitter(fitter_cls).priors_from_data(X, y)["y_hat"].parameters["sigma"]
         rate = np.asarray(sigma.parameters["lam"])
         assert np.all(np.isfinite(rate))
         assert np.all(rate > 0)

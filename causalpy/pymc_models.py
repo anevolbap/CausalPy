@@ -671,12 +671,7 @@ def _data_scaled_y_hat_prior(y: xr.DataArray) -> Prior:
             scales = np.std(y_values, axis=0, ddof=1)
     with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
         rates = 2 / scales
-    invalid = (
-        ~np.isfinite(scales)
-        | (scales <= 0)
-        | ~np.isfinite(rates)
-        | (rates <= 0)
-    )
+    invalid = ~np.isfinite(scales) | (scales <= 0) | ~np.isfinite(rates) | (rates <= 0)
     if np.any(invalid):
         invalid_units = ", ".join(repr(str(unit)) for unit in treated_units[invalid])
         raise ValueError(

@@ -302,17 +302,23 @@ class SyntheticControl(BaseExperiment):
 
     def _clone_weighted_sum_fitter_for_opt_out(self) -> bool:
         """Clone a stock fitter only when a fit must retain its legacy prior."""
-        if (
-            self.auto_scale_sigma
-            or type(self.model)
-            not in (WeightedSumFitter, SoftmaxWeightedSumFitter)
-            or "y_hat" in (self.model._user_priors or {})
+        model = self.model
+        if self.auto_scale_sigma or not isinstance(
+            model, (WeightedSumFitter, SoftmaxWeightedSumFitter)
         ):
             return False
-        model = self.model._clone()
-        setattr(model, "_auto_scale_sigma", False)
-        self.model = model
-        self._model_backend = PyMCModelAdapter(model)
+        if type(model) not in (WeightedSumFitter, SoftmaxWeightedSumFitter):
+            return False
+        if "y_hat" in (model._user_priors or {}):
+            return False
+        cloned_model = model._clone()
+        if not isinstance(cloned_model, (WeightedSumFitter, SoftmaxWeightedSumFitter)):
+            raise RuntimeError(
+                f"{type(model).__name__}._clone() returned an incompatible model"
+            )
+        cloned_model._auto_scale_sigma = False
+        self.model = cloned_model
+        self._model_backend = PyMCModelAdapter(cloned_model)
         return True
 
     def algorithm(self) -> None:
