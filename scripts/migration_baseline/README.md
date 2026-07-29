@@ -11,6 +11,8 @@ The fixed suite has two representative Bayesian experiments using input rows ser
 - `DifferenceInDifferences` with `LinearRegression`, including its public effect-summary table, treatment-effect posterior, fitted draw-wise R², and treated-post conditional-mean counterfactual.
 - `SyntheticControl` with `WeightedSumFitter`, including its public average/cumulative effect-summary rows, post-impact posteriors, fitted draw-wise R², and post-treatment conditional-mean counterfactual.
 
+The DiD fixture includes stable `unit` labels required by its public constructor. They are omitted from the model formula and do not alter the serialized outcomes or estimand.
+
 All counterfactuals are adapter-returned `mu` conditional expected values. The harness rejects noisy `y_hat` predictions, missing canonical dimensions, or changed coordinate values.
 
 ## Registered protocol

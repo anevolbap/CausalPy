@@ -16,7 +16,9 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import math
+import subprocess
 import sys
 from pathlib import Path
 
@@ -175,6 +177,41 @@ def test_capture_rejects_dirty_pinned_checkout_before_import(
 
     with pytest.raises(harness.HarnessError, match="checkout must be clean"):
         harness._capture_artifact("pymc6", tmp_path)
+
+
+def test_did_capture_fixture_passes_constructor_validation_without_mcmc() -> None:
+    """The pinned DiD fixture reaches real constructor validation with OLS only."""
+    harness = _load_harness_module()
+    records_json = json.dumps(harness._records_payload(harness.DID_RECORDS))
+    script = "\n".join(
+        [
+            "import json",
+            "import pandas as pd",
+            "import causalpy as cp",
+            "from sklearn.linear_model import LinearRegression",
+            f"data = pd.DataFrame(json.loads({records_json!r}))",
+            'assert set(data.loc[data["group"] == 0, "unit"]) == {"control"}',
+            'assert set(data.loc[data["group"] == 1, "unit"]) == {"treated"}',
+            "result = cp.DifferenceInDifferences(",
+            "    data,",
+            '    formula="y ~ 1 + group * post_treatment",',
+            '    time_variable_name="t",',
+            '    group_variable_name="group",',
+            "    model=LinearRegression(),",
+            ")",
+            "assert result.causal_impact is not None",
+        ]
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        check=False,
+        capture_output=True,
+        cwd=REPO_ROOT,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def _report_capture_evidence(
