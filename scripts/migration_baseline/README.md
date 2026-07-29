@@ -13,6 +13,8 @@ The fixed suite has two representative Bayesian experiments using input rows ser
 
 The DiD fixture includes stable `unit` labels required by its public constructor. They are omitted from the model formula and do not alter the serialized outcomes or estimand.
 
+The public scalar DiD effect is canonicalized to `(chain, draw)` when a backend exposes only a singleton `treated_units` dimension. A non-singleton or otherwise unexpected effect dimension fails capture; semantic equality remains strict for every retained coordinate.
+
 All counterfactuals are adapter-returned `mu` conditional expected values. The harness rejects noisy `y_hat` predictions, missing canonical dimensions, or changed coordinate values.
 
 ## Registered protocol

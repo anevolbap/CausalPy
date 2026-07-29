@@ -22,7 +22,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+import numpy as np
 import pytest
+import xarray as xr
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "migration_baseline" / "harness.py"
@@ -155,6 +157,61 @@ def test_hdi_containment_remains_diagnostic_only() -> None:
     assert result["absolute_mean_gate_passed"]
     assert result["standardized_mean_drift_gate_passed"]
     assert not result["mutual_hdi_containment_diagnostic"]
+
+
+def test_pymc5_singleton_effect_is_canonicalized_before_table_binding() -> None:
+    """A PyMC 5-shaped singleton effect must yield the scalar table selector."""
+    harness = _load_harness_module()
+    pymc5_effect = xr.DataArray(
+        np.arange(harness.CHAINS * harness.DRAWS, dtype=float).reshape(
+            harness.CHAINS, harness.DRAWS, 1
+        ),
+        dims=("chain", "draw", "treated_units"),
+        coords={
+            "chain": np.arange(harness.CHAINS),
+            "draw": np.arange(harness.DRAWS),
+            "treated_units": ["unit_0"],
+        },
+        name="beta",
+    )
+
+    class StableArviZ:
+        @staticmethod
+        def hdi(values, *, prob):
+            assert prob == harness.HDI_PROB
+            return np.array([np.min(values), np.max(values)])
+
+        @staticmethod
+        def mcse(_values, *, method):
+            assert method == "mean"
+            return 0.01
+
+        @staticmethod
+        def rhat(_values, *, method):
+            assert method == "rank"
+            return 1.0
+
+        @staticmethod
+        def ess(_values, *, method):
+            assert method in {"bulk", "tail"}
+            return 800.0
+
+    captured = harness._capture_series(
+        "did.causal_impact",
+        harness._canonical_scalar_effect(pymc5_effect),
+        StableArviZ,
+        np,
+    )
+
+    assert captured["semantics"]["dims"] == ["chain", "draw"]
+    assert captured["metrics"][0]["selector"] == {}
+    assert harness._series_metric(captured, {})["id"] == "did.causal_impact"
+
+    multi_unit_effect = xr.concat(
+        [pymc5_effect, pymc5_effect], dim="treated_units"
+    ).assign_coords(treated_units=["unit_0", "unit_1"])
+    with pytest.raises(harness.HarnessError, match="unexpected non-sample"):
+        harness._canonical_scalar_effect(multi_unit_effect)
 
 
 def test_capture_rejects_dirty_pinned_checkout_before_import(

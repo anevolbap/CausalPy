@@ -558,6 +558,26 @@ def _capture_series(
     return {"name": name, "semantics": semantics, "metrics": metrics}
 
 
+def _canonical_scalar_effect(data: Any) -> Any:
+    """Normalize only the known singleton backend dimension of a scalar DiD effect."""
+    if tuple(data.dims[:2]) != ("chain", "draw"):
+        raise HarnessError(
+            "Scalar effect must begin with canonical ('chain', 'draw') dimensions, "
+            f"got {tuple(data.dims)!r}"
+        )
+    value_dimensions = tuple(
+        dimension for dimension in data.dims if dimension not in {"chain", "draw"}
+    )
+    if not value_dimensions:
+        return data
+    if value_dimensions == ("treated_units",) and data.sizes["treated_units"] == 1:
+        return data.isel({"treated_units": 0}, drop=True)
+    raise HarnessError(
+        "Scalar DiD effect has an unexpected non-sample dimension contract: "
+        f"{value_dimensions!r}"
+    )
+
+
 def _coordinates_match(left: Any, right: Any, dimension: str, np: Any) -> bool:
     """Return whether two xarray coordinates have the same values and order."""
     return np.array_equal(left.coords[dimension].values, right.coords[dimension].values)
@@ -706,7 +726,12 @@ def _capture_difference_in_differences(
     draw_wise_r2 = _draw_wise_r2(result.design["y"], fitted_mu, xr, np)
 
     series = [
-        _capture_series("did.causal_impact", result.causal_impact, az, np),
+        _capture_series(
+            "did.causal_impact",
+            _canonical_scalar_effect(result.causal_impact),
+            az,
+            np,
+        ),
         _capture_series("did.draw_wise_r2", draw_wise_r2, az, np),
         _capture_series(
             "did.counterfactual_mu",
