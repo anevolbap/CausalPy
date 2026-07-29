@@ -15,6 +15,8 @@
 
 from __future__ import annotations
 
+import argparse
+import copy
 import importlib.util
 import json
 import math
@@ -55,6 +57,158 @@ def _summary(
         "mcse_mean": mcse_mean,
         "hdi_lower": hdi_lower,
         "hdi_upper": hdi_upper,
+    }
+
+
+def _valid_artifact(
+    harness,
+    tmp_path: Path,
+    *,
+    stack: str,
+    role: str,
+    capture_id: str,
+    batch_id: str = "00000000-0000-4000-8000-000000000000",
+    harness_sha256: str = "a" * 64,
+) -> dict[str, object]:
+    """Build schema-complete evidence without importing a sampling stack."""
+    root = (tmp_path / stack / "checkout").resolve()
+    prefix = (tmp_path / stack / "prefix").resolve()
+    expected_major = harness.STACK_RUNTIME_MAJORS[stack]
+    dependencies = {
+        "arviz": f"{expected_major['arviz']}.0.0",
+        "causalpy": "0.8.0",
+        "numpy": "2.0.0",
+        "pandas": "3.0.0",
+        "pymc": f"{expected_major['pymc']}.0.0",
+        "pytensor": f"{expected_major['pytensor']}.0.0",
+        "xarray": "2026.1.0",
+    }
+    cases = []
+    for case_name, manifest in harness._scenario_manifest().items():
+        series = []
+        for series_name, series_manifest in manifest["series"].items():
+            metrics = []
+            for metric in series_manifest["metrics"]:
+                metrics.append(
+                    {
+                        **copy.deepcopy(metric),
+                        "draw_digest": "d" * 64,
+                        "summary": {
+                            "mean": 1.0,
+                            "posterior_sd": 1.0,
+                            "mcse_mean": 0.01,
+                            "rhat": 1.0,
+                            "ess_bulk": 800.0,
+                            "ess_tail": 800.0,
+                            "hdi_lower": 0.0,
+                            "hdi_upper": 2.0,
+                        },
+                    }
+                )
+            series.append(
+                {
+                    "name": series_name,
+                    "semantics": copy.deepcopy(series_manifest["semantics"]),
+                    "metrics": metrics,
+                }
+            )
+        cases.append(
+            {
+                "name": case_name,
+                "fixture": copy.deepcopy(manifest["fixture"]),
+                "sampling_quality": {
+                    "divergences": 0,
+                    "tree_depth_source": "tree_depth",
+                    "tree_depth_events": 0,
+                    "max_observed_tree_depth": 7,
+                    "finite_values": True,
+                },
+                "effect_summary": copy.deepcopy(manifest["effect_summary"]),
+                "counterfactual": copy.deepcopy(manifest["counterfactual"]),
+                "series": series,
+            }
+        )
+    return {
+        "schema_version": harness.ARTIFACT_SCHEMA_VERSION,
+        "suite": harness.SUITE_NAME,
+        "provenance": {
+            "stack": stack,
+            "expected_commit": harness.STACK_COMMITS[stack],
+            "actual_commit": harness.STACK_COMMITS[stack],
+            "repo_root": str(root),
+            "causalpy_path": str(root / "causalpy" / "__init__.py"),
+            "checkout_clean": True,
+            "capture_role": role,
+            "capture_ordinal": harness.CAPTURE_ROLES[role][1],
+            "capture_id": capture_id,
+            "batch_id": batch_id,
+            "harness_path": str(tmp_path / "harness.py"),
+            "harness_sha256": harness_sha256,
+            "harness_commit": "b" * 40,
+            "harness_git_blob_sha256": harness_sha256,
+            "harness_checkout_clean": True,
+            "python": "3.12.0",
+            "python_implementation": "CPython",
+            "platform": "Darwin-25.0.0-arm64",
+            "machine": "arm64",
+            "dependencies": dependencies,
+            "runtime": {
+                "executable": str(prefix / "bin" / "python"),
+                "prefix": str(prefix),
+                "module_paths": {
+                    name: str(prefix / "lib" / f"{name}.py")
+                    for name in (
+                        "arviz",
+                        "numpy",
+                        "pandas",
+                        "pymc",
+                        "pytensor",
+                        "xarray",
+                    )
+                },
+                "causalpy_editable_target": str(root),
+            },
+        },
+        "protocol": harness._protocol(True),
+        "cases": cases,
+    }
+
+
+def _valid_artifact_batch(harness, tmp_path: Path) -> tuple[dict[str, object], ...]:
+    """Build four role-complete artifacts for comparator integrity tests."""
+    capture_ids = (
+        "00000000-0000-4000-8000-000000000001",
+        "00000000-0000-4000-8000-000000000002",
+        "00000000-0000-4000-8000-000000000003",
+        "00000000-0000-4000-8000-000000000004",
+    )
+    roles = (
+        "reference_first",
+        "reference_second",
+        "candidate_first",
+        "candidate_second",
+    )
+    stacks = ("pymc5", "pymc5", "pymc6", "pymc6")
+    return tuple(
+        _valid_artifact(
+            harness,
+            tmp_path,
+            stack=stack,
+            role=role,
+            capture_id=capture_id,
+        )
+        for stack, role, capture_id in zip(stacks, roles, capture_ids, strict=True)
+    )
+
+
+def _fake_harness_identity() -> dict[str, str | bool]:
+    """Provide the clean comparator identity expected by synthetic artifacts."""
+    return {
+        "path": "/comparator/harness.py",
+        "sha256": "a" * 64,
+        "commit": "b" * 40,
+        "git_blob_sha256": "a" * 64,
+        "checkout_clean": True,
     }
 
 
@@ -266,7 +420,12 @@ def test_capture_rejects_dirty_pinned_checkout_before_import(
     monkeypatch.setattr(harness, "_import_capture_dependencies", unexpected_import)
 
     with pytest.raises(harness.HarnessError, match="checkout must be clean"):
-        harness._capture_artifact("pymc6", tmp_path)
+        harness._capture_artifact(
+            "pymc6",
+            tmp_path,
+            batch_id="00000000-0000-4000-8000-000000000000",
+            capture_role="candidate_first",
+        )
 
 
 def test_did_capture_fixture_passes_constructor_validation_without_mcmc() -> None:
@@ -308,16 +467,36 @@ def _report_capture_evidence(
     *,
     stack: str,
     fixture_sha256: str,
+    capture_id: str,
 ) -> dict[str, object]:
     """Build one concise capture-evidence record for report rendering."""
     return {
         "provenance": {
+            "capture_id": capture_id,
+            "checkout_clean": True,
             "causalpy_path": f"/checkouts/{stack}/causalpy/__init__.py",
             "harness_sha256": "harness-sha256",
+            "harness_commit": "harness-commit",
             "python": "3.12.0",
             "python_implementation": "CPython",
             "platform": "Darwin-25.0.0-arm64",
             "machine": "arm64",
+            "runtime": {
+                "prefix": f"/prefixes/{stack}",
+                "executable": f"/prefixes/{stack}/bin/python",
+                "causalpy_editable_target": f"/checkouts/{stack}",
+                "module_paths": {
+                    name: f"/prefixes/{stack}/lib/{name}.py"
+                    for name in (
+                        "arviz",
+                        "numpy",
+                        "pandas",
+                        "pymc",
+                        "pytensor",
+                        "xarray",
+                    )
+                },
+            },
             "dependencies": {
                 "arviz": "0.22.0",
                 "pymc": "6.2.0",
@@ -333,6 +512,7 @@ def _report_capture_evidence(
                     "tree_depth_source": "tree_depth",
                     "tree_depth_events": 0,
                     "max_observed_tree_depth": 7,
+                    "finite_values": True,
                 },
                 "metric_count": 3,
                 "max_rhat": 1.001,
@@ -344,33 +524,71 @@ def _report_capture_evidence(
 
 
 def test_report_records_artifact_provenance_and_observed_validity() -> None:
-    """Generated attachment reports must retain the evidence behind their gates."""
+    """Generated attachments must include every REPORT_TEMPLATE evidence field."""
     harness = _load_harness_module()
+    capture_ids = {
+        "reference_first": "capture-reference-first",
+        "reference_second": "capture-reference-second",
+        "candidate_first": "capture-candidate-first",
+        "candidate_second": "capture-candidate-second",
+    }
     evidence = {
         "reference_first": _report_capture_evidence(
-            stack="pymc5", fixture_sha256="fixture-reference-first"
+            stack="pymc5",
+            fixture_sha256="fixture-reference-first",
+            capture_id=capture_ids["reference_first"],
         ),
         "reference_second": _report_capture_evidence(
-            stack="pymc5", fixture_sha256="fixture-reference-second"
+            stack="pymc5",
+            fixture_sha256="fixture-reference-second",
+            capture_id=capture_ids["reference_second"],
         ),
         "candidate_first": _report_capture_evidence(
-            stack="pymc6", fixture_sha256="fixture-candidate-first"
+            stack="pymc6",
+            fixture_sha256="fixture-candidate-first",
+            capture_id=capture_ids["candidate_first"],
         ),
         "candidate_second": _report_capture_evidence(
-            stack="pymc6", fixture_sha256="fixture-candidate-second"
+            stack="pymc6",
+            fixture_sha256="fixture-candidate-second",
+            capture_id=capture_ids["candidate_second"],
         ),
     }
     comparison = {
         "passed": True,
         "reference": {"stack": "pymc5", "commit": "reference-commit"},
         "candidate": {"stack": "pymc6", "commit": "candidate-commit"},
+        "comparator": {
+            "harness_path": "/harness.py",
+            "harness_commit": "harness-commit",
+            "harness_sha256": "harness-sha256",
+            "harness_git_blob_sha256": "harness-blob-sha256",
+            "harness_checkout_clean": True,
+        },
+        "capture_batch": {
+            "batch_id": "batch-id",
+            "capture_ids": capture_ids,
+        },
+        "cross_stack_runtime": {
+            "distinct_prefixes": True,
+            "same_platform": True,
+            "same_machine": True,
+            "same_python": True,
+            "same_python_implementation": True,
+            "same_numpy": True,
+            "same_pandas": True,
+            "same_xarray": True,
+            "passed": True,
+        },
         "within_stack_repeatability": {
             "reference": {"metric_count": 3, "passed": True},
             "candidate": {"metric_count": 3, "passed": True},
         },
         "hard_gates": {
             "protocol_equal": True,
-            "same_harness_version": True,
+            "same_executing_harness_version": True,
+            "fresh_capture_batch_integrity": True,
+            "isolated_stack_runtime": True,
             "within_stack_repeatability": True,
             "semantic_table_and_coordinate_equality": True,
             "absolute_mean_delta": True,
@@ -421,11 +639,338 @@ def test_report_records_artifact_provenance_and_observed_validity() -> None:
 
     report = harness.render_report(comparison)
 
+    assert "## Comparator identity" in report
+    assert "harness-commit" in report
+    assert "harness-blob-sha256" in report
+    assert "Immutable scenario manifest version" in report
     assert "## Capture provenance" in report
     assert "`/evidence/pymc5-run-1.json`" in report
     assert "`artifact-reference-first`" in report
+    assert "All sampled checkouts recorded an empty" in report
+    assert "True" in report
     assert "## Capture validity evidence" in report
     assert "`fixture-candidate-second`" in report
     assert "tree_depth / 0 / 7" in report
-    assert "1.001" in report
+    assert "Finite values" in report
+    assert "cores=1" in report
+    assert "maximum tree depth `12`" in report
+    assert "mandatory on local macOS" in report
+    assert "Imported module paths:" in report
+    assert "Matching shared NumPy, pandas, and xarray versions: pass" in report
     assert "750" in report
+
+
+def test_artifact_manifest_rejects_deleted_output_and_substituted_fixture(
+    tmp_path: Path,
+) -> None:
+    """Self-consistent evidence cannot omit an output or replace fixed inputs."""
+    harness = _load_harness_module()
+    artifact = _valid_artifact(
+        harness,
+        tmp_path,
+        stack="pymc5",
+        role="reference_first",
+        capture_id="00000000-0000-4000-8000-000000000001",
+    )
+    harness._validate_artifact(artifact)
+
+    missing_series = copy.deepcopy(artifact)
+    missing_series["cases"][0]["series"].pop()
+    with pytest.raises(harness.HarnessError, match="series differ from manifest"):
+        harness._validate_artifact(missing_series)
+
+    unknown_case_field = copy.deepcopy(artifact)
+    unknown_case_field["cases"][0]["unexpected"] = "cannot be ignored"
+    with pytest.raises(harness.HarnessError, match="invalid keys"):
+        harness._validate_artifact(unknown_case_field)
+
+    substituted_fixture = copy.deepcopy(artifact)
+    substituted_fixture["cases"][0]["fixture"]["records"][0]["y"] = 999.0
+    with pytest.raises(harness.HarnessError, match="fixture hash does not match"):
+        harness._validate_artifact(substituted_fixture)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("draw_digest", "g" * 64, "invalid draw digest"),
+        ("posterior_sd", -1.0, "negative posterior SD"),
+        ("mcse_mean", -0.01, "negative MCSE"),
+        ("rhat", False, "must be a real number"),
+    ],
+)
+def test_artifact_validation_rejects_impossible_serialized_diagnostics(
+    tmp_path: Path, field: str, value: object, message: str
+) -> None:
+    """Untrusted JSON cannot turn malformed diagnostics into accepted evidence."""
+    harness = _load_harness_module()
+    artifact = _valid_artifact(
+        harness,
+        tmp_path,
+        stack="pymc5",
+        role="reference_first",
+        capture_id="00000000-0000-4000-8000-000000000001",
+    )
+    metric = artifact["cases"][0]["series"][0]["metrics"][0]
+    if field == "draw_digest":
+        metric[field] = value
+    else:
+        metric["summary"][field] = value
+
+    with pytest.raises(harness.HarnessError, match=message):
+        harness._validate_artifact(artifact)
+
+
+def test_artifact_validation_rejects_self_reported_tree_depth_saturation(
+    tmp_path: Path,
+) -> None:
+    """A zero event count cannot conceal a saturated observed tree depth."""
+    harness = _load_harness_module()
+    artifact = _valid_artifact(
+        harness,
+        tmp_path,
+        stack="pymc5",
+        role="reference_first",
+        capture_id="00000000-0000-4000-8000-000000000001",
+    )
+    quality = artifact["cases"][0]["sampling_quality"]
+    quality["tree_depth_source"] = "tree_depth"
+    quality["tree_depth_events"] = 0
+    quality["max_observed_tree_depth"] = harness.MAX_TREEDEPTH
+
+    with pytest.raises(harness.HarnessError, match="tree-depth saturation"):
+        harness._validate_artifact(artifact)
+
+
+def test_capture_runtime_rejects_wrong_pymc_major_before_sampling(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A mislabeled PyMC 5 environment cannot begin a PyMC 6 capture."""
+    harness = _load_harness_module()
+    prefix = tmp_path / "prefix"
+    repo_root = tmp_path / "checkout"
+
+    def module(version: str, name: str):
+        return type(
+            name,
+            (),
+            {
+                "__version__": version,
+                "__file__": str(prefix / "lib" / f"{name}.py"),
+            },
+        )
+
+    dependencies = {
+        "az": module("1.0.0", "arviz"),
+        "cp": module("0.8.0", "causalpy"),
+        "np": module("2.0.0", "numpy"),
+        "pd": module("3.0.0", "pandas"),
+        "pm": module("5.0.0", "pymc"),
+        "pt": module("3.0.0", "pytensor"),
+        "xr": module("2026.1.0", "xarray"),
+    }
+    monkeypatch.setattr(harness.sys, "prefix", str(prefix))
+    monkeypatch.setattr(harness.sys, "executable", str(prefix / "bin" / "python"))
+    monkeypatch.setattr(harness, "_editable_causalpy_target", lambda: repo_root)
+
+    with pytest.raises(harness.HarnessError, match="requires imported pymc major 6"):
+        harness._capture_runtime_provenance("pymc6", dependencies, repo_root)
+
+
+def test_comparator_requires_the_executing_harness_digest(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Four matching self-reported digests cannot satisfy a changed comparator."""
+    harness = _load_harness_module()
+    artifacts = list(_valid_artifact_batch(harness, tmp_path))
+    artifacts[0]["provenance"]["harness_sha256"] = "c" * 64
+    artifacts[0]["provenance"]["harness_git_blob_sha256"] = "c" * 64
+    monkeypatch.setattr(harness, "_harness_identity", _fake_harness_identity)
+
+
+    with pytest.raises(harness.HarnessError, match="executing comparator"):
+        harness.compare_artifacts(*artifacts)
+
+
+def test_comparator_requires_the_executing_harness_commit(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Matching source bytes alone cannot bind evidence to a different commit."""
+    harness = _load_harness_module()
+    artifacts = list(_valid_artifact_batch(harness, tmp_path))
+    artifacts[0]["provenance"]["harness_commit"] = "c" * 40
+    monkeypatch.setattr(harness, "_harness_identity", _fake_harness_identity)
+
+    with pytest.raises(harness.HarnessError, match="harness_commit"):
+        harness.compare_artifacts(*artifacts)
+
+
+
+def test_comparator_requires_four_unique_role_bound_capture_ids(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Copied evidence cannot impersonate an independent capture process."""
+    harness = _load_harness_module()
+    artifacts = list(_valid_artifact_batch(harness, tmp_path))
+    artifacts[3]["provenance"]["capture_id"] = artifacts[2]["provenance"]["capture_id"]
+    monkeypatch.setattr(harness, "_harness_identity", _fake_harness_identity)
+
+    with pytest.raises(harness.HarnessError, match="distinct capture IDs"):
+        harness.compare_artifacts(*artifacts)
+
+
+def test_cross_stack_prefix_reuse_fails_the_runtime_gate(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A comparison cannot call one reused prefix an isolated migration run."""
+    harness = _load_harness_module()
+    artifacts = list(_valid_artifact_batch(harness, tmp_path))
+    reference_prefix = artifacts[0]["provenance"]["runtime"]["prefix"]
+    for artifact in artifacts[2:]:
+        runtime = artifact["provenance"]["runtime"]
+        old_prefix = runtime["prefix"]
+        runtime["prefix"] = reference_prefix
+        runtime["executable"] = runtime["executable"].replace(
+            old_prefix, reference_prefix
+        )
+        runtime["module_paths"] = {
+            name: path.replace(old_prefix, reference_prefix)
+            for name, path in runtime["module_paths"].items()
+        }
+    monkeypatch.setattr(harness, "_harness_identity", _fake_harness_identity)
+
+    comparison = harness.compare_artifacts(*artifacts)
+
+    assert not comparison["cross_stack_runtime"]["distinct_prefixes"]
+    assert not comparison["hard_gates"]["isolated_stack_runtime"]
+    assert not comparison["passed"]
+
+
+def test_same_stack_summary_mismatch_fails_repeatability(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Same raw draws cannot hide a changed serialized posterior summary."""
+    harness = _load_harness_module()
+    artifacts = list(_valid_artifact_batch(harness, tmp_path))
+    summary = artifacts[1]["cases"][0]["series"][0]["metrics"][0]["summary"]
+    summary["mean"] = 1.001
+    monkeypatch.setattr(harness, "_harness_identity", _fake_harness_identity)
+
+    comparison = harness.compare_artifacts(*artifacts)
+
+    repeatability = comparison["within_stack_repeatability"]["reference"]
+    assert not repeatability["passed"]
+    assert repeatability["mismatched_summary_metric_ids"] == ["did.causal_impact"]
+    assert not comparison["passed"]
+
+
+def test_same_stack_sampling_quality_mismatch_fails_repeatability(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Same posterior draws cannot hide changed capture-validity evidence."""
+    harness = _load_harness_module()
+    artifacts = list(_valid_artifact_batch(harness, tmp_path))
+    artifacts[1]["cases"][0]["sampling_quality"]["max_observed_tree_depth"] = 8
+    monkeypatch.setattr(harness, "_harness_identity", _fake_harness_identity)
+
+    comparison = harness.compare_artifacts(*artifacts)
+
+    repeatability = comparison["within_stack_repeatability"]["reference"]
+    assert not repeatability["passed"]
+    assert repeatability["mismatched_sampling_quality_cases"] == [
+        "difference_in_differences"
+    ]
+    assert not comparison["passed"]
+
+
+def test_cross_stack_shared_dependency_drift_fails_runtime_gate(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A shared NumPy change cannot be labeled solely as a PyMC migration."""
+    harness = _load_harness_module()
+    artifacts = list(_valid_artifact_batch(harness, tmp_path))
+    for artifact in artifacts[2:]:
+        artifact["provenance"]["dependencies"]["numpy"] = "2.1.0"
+    monkeypatch.setattr(harness, "_harness_identity", _fake_harness_identity)
+
+    comparison = harness.compare_artifacts(*artifacts)
+
+    assert not comparison["cross_stack_runtime"]["same_numpy"]
+    assert not comparison["hard_gates"]["isolated_stack_runtime"]
+    assert not comparison["passed"]
+
+
+def test_cross_stack_python_drift_fails_runtime_gate(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A changed interpreter cannot be labeled solely as a PyMC migration."""
+    harness = _load_harness_module()
+    artifacts = list(_valid_artifact_batch(harness, tmp_path))
+    for artifact in artifacts[2:]:
+        artifact["provenance"]["python"] = "3.13.0"
+    monkeypatch.setattr(harness, "_harness_identity", _fake_harness_identity)
+
+    comparison = harness.compare_artifacts(*artifacts)
+
+    assert not comparison["cross_stack_runtime"]["same_python"]
+    assert not comparison["hard_gates"]["isolated_stack_runtime"]
+    assert not comparison["passed"]
+
+
+def test_artifact_loader_rejects_duplicate_keys_and_reads_each_input_once(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Reported artifact digests must be derived from the decision byte buffers."""
+    harness = _load_harness_module()
+    duplicate_key_path = tmp_path / "duplicate.json"
+    duplicate_key_path.write_text(
+        '{"schema_version": 2, "schema_version": 2}', encoding="utf-8"
+    )
+    with pytest.raises(harness.HarnessError, match="duplicate JSON key"):
+        harness._read_artifact_input(duplicate_key_path)
+
+    artifacts = _valid_artifact_batch(harness, tmp_path)
+    paths = [tmp_path / f"artifact-{index}.json" for index in range(len(artifacts))]
+    for path, artifact in zip(paths, artifacts, strict=True):
+        path.write_text(json.dumps(artifact), encoding="utf-8")
+    original_read_bytes = Path.read_bytes
+    reads: list[Path] = []
+
+    def counting_read_bytes(path: Path) -> bytes:
+        if path in paths:
+            reads.append(path)
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", counting_read_bytes)
+    inputs = harness._load_distinct_artifacts(paths)
+    metadata = harness._artifact_input_metadata(inputs)
+
+    assert reads == paths
+    assert [item["sha256"] for item in metadata] == [
+        artifact_input.sha256 for artifact_input in inputs
+    ]
+
+
+def test_capture_command_rejects_existing_destination_before_sampling(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A failed rerun cannot silently preserve or replace stale evidence."""
+    harness = _load_harness_module()
+    output = tmp_path / "evidence" / "pymc5-run-1.json"
+    output.parent.mkdir()
+    output.write_text("stale", encoding="utf-8")
+    args = argparse.Namespace(
+        stack="pymc5",
+        capture_role="reference_first",
+        batch_id="00000000-0000-4000-8000-000000000000",
+        repo_root=tmp_path / "checkout",
+        output=output,
+    )
+
+    def unexpected_capture(*_args, **_kwargs):
+        pytest.fail("an existing destination must be rejected before sampling")
+
+    monkeypatch.setattr(harness, "_capture_artifact", unexpected_capture)
+
+    with pytest.raises(harness.HarnessError, match="already exists"):
+        harness._capture_command(args)
