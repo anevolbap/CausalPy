@@ -22,6 +22,7 @@ unguarded division.
 import matplotlib.pyplot as plt
 import numpy as np
 import pytest
+import xarray as xr
 
 import causalpy as cp
 
@@ -36,11 +37,19 @@ sample_kwargs = {
 
 @pytest.fixture(scope="module")
 def ipw_result(mock_pymc_sample):
-    """Create a fitted IPW result for testing."""
+    """Create the NHEFS IPW setup used by the affected notebook."""
     df = cp.load_data("nhefs")
+    df_standardised = (df - df.mean()) / df.std()
+    df_standardised["trt"] = df["trt"]
+    df_standardised["outcome"] = df["outcome"]
+    formula = (
+        "trt ~ 1 + age + race + sex + smokeintensity + smokeyrs + wt71 + active_1 + "
+        "active_2 + education_2 + education_3 + education_4 + education_5 + "
+        "exercise_1 + exercise_2"
+    )
     return cp.InversePropensityWeighting(
-        df,
-        formula="trt ~ 1 + age + race",
+        df_standardised,
+        formula=formula,
         outcome_variable="outcome",
         weighting_scheme="robust",
         model=cp.pymc_models.PropensityScore(sample_kwargs=sample_kwargs),
@@ -56,6 +65,74 @@ def extreme_idata(ipw_result):
     idata.posterior["p"][:, :, :5] = 0.0
     idata.posterior["p"][:, :, 5:10] = 1.0
     return idata
+
+
+@pytest.fixture
+def notebook_repro_idata(ipw_result):
+    """Create 500 posterior draws with endpoint scores for the notebook call."""
+    t = ipw_result.t.flatten()
+    treated = np.flatnonzero(t == 1)
+    controls = np.flatnonzero(t == 0)
+    ps = np.full((1, 500, len(t)), 0.5)
+    ps[0, :, treated[0]] = 0.0
+    ps[0, :, controls[0]] = 1.0
+    ps[0, :, treated[1]] = np.linspace(0.25, 0.75, 500)
+    ps[0, :, controls[1]] = np.linspace(0.75, 0.25, 500)
+    posterior = xr.Dataset({"p": (("chain", "draw", "obs_ind"), ps)})
+    return xr.DataTree.from_dict({"posterior": posterior})
+
+
+def test_nhefs_notebook_repro_has_finite_plot_data(
+    ipw_result, notebook_repro_idata, monkeypatch
+):
+    """Endpoint draws in the full #645 call stay finite and render a distribution."""
+    weighted_histograms = []
+    original_histogram = np.histogram
+
+    def record_histogram(a, bins=10, range=None, density=None, weights=None):
+        if weights is not None:
+            weighted_histograms.append(np.asarray(weights))
+        return original_histogram(a, bins, range, density, weights)
+
+    monkeypatch.setattr(np, "histogram", record_histogram)
+    plotted_data = {}
+    original_axes_hist = plt.Axes.hist
+
+    def record_axes_hist(self, x, *args, **kwargs):
+        plotted_data[kwargs["label"]] = np.asarray(x)
+        return original_axes_hist(self, x, *args, **kwargs)
+
+    monkeypatch.setattr(plt.Axes, "hist", record_axes_hist)
+
+    with pytest.warns(
+        UserWarning,
+        match=(
+            "Extreme propensity scores detected.*"
+            "Capping values to prevent numerical instability"
+        ),
+    ):
+        fig, axs = ipw_result.plot_ate(
+            idata=notebook_repro_idata,
+            method="robust",
+            prop_draws=10,
+            ate_draws=500,
+        )
+
+    assert len(weighted_histograms) == 20
+    assert all(weights.size > 0 for weights in weighted_histograms)
+    assert all(np.isfinite(weights).all() for weights in weighted_histograms)
+    assert set(plotted_data) == {"E(Y(1))", "E(Y(0))", "ATE"}
+    assert all(values.shape == (500,) for values in plotted_data.values())
+    assert all(np.isfinite(values).all() for values in plotted_data.values())
+    assert all(np.ptp(values) > 0 for values in plotted_data.values())
+
+    top_heights = np.asarray([patch.get_height() for patch in axs[0].patches])
+    ate_bin_heights = np.asarray([patch.get_height() for patch in axs[2].patches])
+    assert np.isfinite(top_heights).all()
+    assert np.any(top_heights > 0)
+    assert np.any(top_heights < 0)
+    assert np.count_nonzero(ate_bin_heights) > 1
+    plt.close(fig)
 
 
 class TestPlotAteExtremeScores:
