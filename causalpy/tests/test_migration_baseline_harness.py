@@ -23,6 +23,7 @@ import math
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -30,6 +31,9 @@ import xarray as xr
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "migration_baseline" / "harness.py"
+
+# Decoded artifact JSON: a heterogeneous, arbitrarily nested mapping that the harness itself types as ``dict[str, Any]`` and validates at runtime. These tests deliberately reach into and mutate that structure at arbitrary depths, including inserting keys the schema does not register, so a TypedDict would reject the very tampering being asserted.
+ArtifactPayload = dict[str, Any]
 
 
 def _load_harness_module():
@@ -69,7 +73,7 @@ def _valid_artifact(
     capture_id: str,
     batch_id: str = "00000000-0000-4000-8000-000000000000",
     harness_sha256: str = "a" * 64,
-) -> dict[str, object]:
+) -> ArtifactPayload:
     """Build schema-complete evidence without importing a sampling stack."""
     root = (tmp_path / stack / "checkout").resolve()
     prefix = (tmp_path / stack / "prefix").resolve()
@@ -174,7 +178,7 @@ def _valid_artifact(
     }
 
 
-def _valid_artifact_batch(harness, tmp_path: Path) -> tuple[dict[str, object], ...]:
+def _valid_artifact_batch(harness, tmp_path: Path) -> tuple[ArtifactPayload, ...]:
     """Build four role-complete artifacts for comparator integrity tests."""
     capture_ids = (
         "00000000-0000-4000-8000-000000000001",
@@ -468,7 +472,7 @@ def _report_capture_evidence(
     stack: str,
     fixture_sha256: str,
     capture_id: str,
-) -> dict[str, object]:
+) -> ArtifactPayload:
     """Build one concise capture-evidence record for report rendering."""
     return {
         "provenance": {
@@ -787,7 +791,6 @@ def test_comparator_requires_the_executing_harness_digest(
     artifacts[0]["provenance"]["harness_git_blob_sha256"] = "c" * 64
     monkeypatch.setattr(harness, "_harness_identity", _fake_harness_identity)
 
-
     with pytest.raises(harness.HarnessError, match="executing comparator"):
         harness.compare_artifacts(*artifacts)
 
@@ -803,7 +806,6 @@ def test_comparator_requires_the_executing_harness_commit(
 
     with pytest.raises(harness.HarnessError, match="harness_commit"):
         harness.compare_artifacts(*artifacts)
-
 
 
 def test_comparator_requires_four_unique_role_bound_capture_ids(

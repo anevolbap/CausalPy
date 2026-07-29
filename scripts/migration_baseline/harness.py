@@ -9,10 +9,9 @@ uses posterior summaries and semantic schemas, never cross-stack draw equality.
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
 import hashlib
-import inspect
 import importlib.metadata
+import inspect
 import json
 import math
 import os
@@ -22,6 +21,7 @@ import subprocess
 import sys
 import tempfile
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
@@ -227,7 +227,9 @@ def _atomic_write_text(path: Path, text: str) -> None:
         try:
             os.link(temporary_path, path)
         except FileExistsError as error:
-            raise HarnessError(f"Evidence destination already exists: {path}") from error
+            raise HarnessError(
+                f"Evidence destination already exists: {path}"
+            ) from error
     finally:
         temporary_path.unlink(missing_ok=True)
 
@@ -290,7 +292,9 @@ def _harness_identity() -> dict[str, str | bool]:
     try:
         relative_path = script_path.relative_to(repo_root).as_posix()
     except ValueError as error:
-        raise HarnessError("Harness file is outside its claimed repository root") from error
+        raise HarnessError(
+            "Harness file is outside its claimed repository root"
+        ) from error
     commit = _run_git(repo_root, "rev-parse", "HEAD")
     if not _COMMIT_PATTERN.fullmatch(commit):
         raise HarnessError(f"Harness Git revision is not a full SHA-1: {commit!r}")
@@ -435,9 +439,7 @@ def _capture_runtime_provenance(
         "pytensor": dependencies["pt"],
         "xarray": dependencies["xr"],
     }
-    versions = {
-        name: _module_version(module, name) for name, module in modules.items()
-    }
+    versions = {name: _module_version(module, name) for name, module in modules.items()}
     for name, expected_major in STACK_RUNTIME_MAJORS[stack].items():
         if _module_major(versions[name], name) != expected_major:
             raise HarnessError(
@@ -1260,9 +1262,7 @@ def _capture_artifact(
     harness_identity = _harness_identity()
 
     dependencies = _import_capture_dependencies(resolved_root)
-    runtime_provenance = _capture_runtime_provenance(
-        stack, dependencies, resolved_root
-    )
+    runtime_provenance = _capture_runtime_provenance(stack, dependencies, resolved_root)
     cp = dependencies["cp"]
     pm = dependencies["pm"]
     sample_kwargs, supports_nuts_sampler = _sample_kwargs(pm)
@@ -1340,11 +1340,6 @@ def _read_artifact_input(path: Path) -> ArtifactInput:
     return ArtifactInput(path=path, sha256=_sha256_bytes(contents), artifact=payload)
 
 
-def _read_json(path: Path) -> dict[str, Any]:
-    """Read one artifact through the single-buffer evidence loader."""
-    return _read_artifact_input(path).artifact
-
-
 def _case_map(artifact: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """Index artifact cases while rejecting duplicated names."""
     cases = artifact.get("cases")
@@ -1397,9 +1392,7 @@ def _metric_map(series: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return result
 
 
-def _require_exact_keys(
-    value: Any, expected: set[str], label: str
-) -> dict[str, Any]:
+def _require_exact_keys(value: Any, expected: set[str], label: str) -> dict[str, Any]:
     """Require one untrusted JSON object to have exactly its registered keys."""
     if not isinstance(value, dict):
         raise HarnessError(f"{label} must be a JSON object")
@@ -1508,7 +1501,9 @@ def _validate_semantics(semantics: Any, label: str) -> None:
     if (
         not isinstance(dimensions, list)
         or len(dimensions) < 2
-        or any(not isinstance(dimension, str) or not dimension for dimension in dimensions)
+        or any(
+            not isinstance(dimension, str) or not dimension for dimension in dimensions
+        )
         or len(set(dimensions)) != len(dimensions)
         or dimensions[:2] != ["chain", "draw"]
     ):
@@ -1517,11 +1512,7 @@ def _validate_semantics(semantics: Any, label: str) -> None:
     if not isinstance(shape, list) or len(shape) != len(dimensions):
         raise HarnessError(f"Series {label!r} has an invalid shape")
     for index, size in enumerate(shape):
-        if (
-            isinstance(size, bool)
-            or not isinstance(size, int)
-            or size <= 0
-        ):
+        if isinstance(size, bool) or not isinstance(size, int) or size <= 0:
             raise HarnessError(
                 f"Series {label!r} has invalid size at dimension {dimensions[index]!r}"
             )
@@ -1575,9 +1566,7 @@ def _validate_sampling_quality(quality: Any, case_name: str) -> None:
         raise HarnessError(f"Case {case_name!r} did not prove finite captured values")
 
 
-def _validate_series(
-    series: Any, expected_name: str, expected: dict[str, Any]
-) -> None:
+def _validate_series(series: Any, expected_name: str, expected: dict[str, Any]) -> None:
     """Validate every expected series, selector, and metric cardinality."""
     series = _require_exact_keys(
         series,
@@ -1818,9 +1807,7 @@ def _validate_artifact(
             sampling.get("nuts_sampler_argument_used"), bool
         ):
             raise HarnessError("Artifact has an invalid NUTS sampler capability flag")
-        if not _json_equal(
-            protocol, _protocol(sampling["nuts_sampler_argument_used"])
-        ):
+        if not _json_equal(protocol, _protocol(sampling["nuts_sampler_argument_used"])):
             raise HarnessError("Artifact protocol differs from the registered protocol")
         cases = _case_map(artifact)
         manifest = _scenario_manifest()
@@ -1904,9 +1891,7 @@ def _repeatability(first: dict[str, Any], second: dict[str, Any]) -> dict[str, A
         for series_name in sorted(first_series):
             first_item = first_series[series_name]
             second_item = second_series[series_name]
-            if not _json_equal(
-                first_item["semantics"], second_item["semantics"]
-            ):
+            if not _json_equal(first_item["semantics"], second_item["semantics"]):
                 raise HarnessError(
                     f"Repeatability coordinate semantics changed for {series_name!r}"
                 )
@@ -1920,9 +1905,7 @@ def _repeatability(first: dict[str, Any], second: dict[str, Any]) -> dict[str, A
                 second_metric = second_metrics[metric_id]
                 if first_metric["draw_digest"] != second_metric["draw_digest"]:
                     draw_digest_mismatches.append(metric_id)
-                if not _json_equal(
-                    first_metric["summary"], second_metric["summary"]
-                ):
+                if not _json_equal(first_metric["summary"], second_metric["summary"]):
                     summary_mismatches.append(metric_id)
     return {
         "stack": first_provenance["stack"],
@@ -2560,7 +2543,11 @@ def _artifact_input_metadata(inputs: list[ArtifactInput]) -> list[dict[str, Any]
         "candidate_second",
     )
     return [
-        {"role": role, "path": str(artifact_input.path), "sha256": artifact_input.sha256}
+        {
+            "role": role,
+            "path": str(artifact_input.path),
+            "sha256": artifact_input.sha256,
+        }
         for role, artifact_input in zip(roles, inputs, strict=True)
     ]
 
