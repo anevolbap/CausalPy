@@ -274,6 +274,60 @@ def test_nhefs_notebook_repro_has_finite_plot_data(
         plt.close(fig)
 
 
+def _axis_fraction(ax, value):
+    """Return the share of the axes height spanned by ``value`` data units."""
+    to_axes = ax.transAxes.inverted().transform
+    origin = to_axes(ax.transData.transform((0, 0)))[1]
+    top = to_axes(ax.transData.transform((0, value)))[1]
+    return abs(top - origin)
+
+
+def test_extreme_scores_keep_observation_counts_visible(
+    ipw_result, notebook_repro_idata
+):
+    """Inflated pseudo-population mass must not flatten the propensity counts."""
+    with pytest.warns(UserWarning, match="Extreme propensity scores"):
+        fig, axs = ipw_result.plot_ate(
+            idata=notebook_repro_idata, method="robust", prop_draws=2, ate_draws=2
+        )
+    try:
+        t = ipw_result.t.flatten()
+        clipped_ps = np.clip(
+            notebook_repro_idata.posterior["p"].values[0, 0], 1e-6, 1 - 1e-6
+        )
+        bins = np.arange(0, 1.005, 0.005)
+        count_peak = max(
+            np.histogram(clipped_ps[t == 0], bins=bins)[0].max(),
+            np.histogram(clipped_ps[t == 1], bins=bins)[0].max(),
+        )
+        heights = np.abs([patch.get_height() for patch in axs[0].patches])
+        # The clipped endpoints inflate the pseudo population by orders of
+        # magnitude over the observation counts, so a linear axis would leave
+        # the propensity score distribution invisible.
+        assert heights.max() > 100 * count_peak
+        assert axs[0].get_yscale() == "symlog"
+        assert axs[0].yaxis.get_transform().linthresh == count_peak
+        assert _axis_fraction(axs[0], count_peak) > 0.05
+    finally:
+        plt.close(fig)
+
+
+def test_well_behaved_weights_stay_on_the_linear_scale(
+    ipw_result, notebook_repro_idata
+):
+    """Weights that do not exceed the counts render inside the linear region."""
+    with pytest.warns(UserWarning, match="Extreme propensity scores"):
+        fig, axs = ipw_result.plot_ate(
+            idata=notebook_repro_idata, method="overlap", prop_draws=2, ate_draws=2
+        )
+    try:
+        linthresh = axs[0].yaxis.get_transform().linthresh
+        heights = np.abs([patch.get_height() for patch in axs[0].patches])
+        assert heights.max() <= linthresh
+    finally:
+        plt.close(fig)
+
+
 class TestPlotAteExtremeScores:
     """plot_ate must not crash when propensity scores hit 0 or 1."""
 

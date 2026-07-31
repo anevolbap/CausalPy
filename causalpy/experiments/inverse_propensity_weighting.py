@@ -657,6 +657,7 @@ class InversePropensityWeighting(BaseExperiment):
             top0, _ = np.histogram(p_i[self.t.flatten() == 0], bins=bins)
             top1, _ = np.histogram(p_i[self.t.flatten() == 1], bins=bins)
             _plot_weights(bins, top0, top1, axs[0])
+            observation_peak = max(top0.max(), top1.max())
             top0, _ = np.histogram(
                 p_i[self.t.flatten() == 0], bins=bins, weights=weight0
             )
@@ -664,6 +665,7 @@ class InversePropensityWeighting(BaseExperiment):
                 p_i[self.t.flatten() == 1], bins=bins, weights=weight1
             )
             _plot_weights(bins, top0, top1, axs[0], color="pseudo_population")
+            return observation_peak
 
         mosaic = """AAAAAA
                     BBBBCC"""
@@ -694,7 +696,15 @@ class InversePropensityWeighting(BaseExperiment):
             ["Treatment PS", "Control PS", "Weighted Pseudo Population", "Extreme PS"],
         )
 
-        [_make_hists(i, axs) for i in range(prop_draws)]
+        peaks = [_make_hists(i, axs) for i in range(prop_draws)]
+        # Clipped extreme propensity scores give finite but enormous IPW weights,
+        # so the pseudo population mass can exceed the observation counts by
+        # orders of magnitude. On a linear axis that flattens the propensity
+        # score distribution to invisibility (issue #645). Anchoring a symmetric
+        # log scale at the observation-count peak keeps the counts linear and
+        # compresses only the mass above them, so well-behaved weights render
+        # essentially as before while inflated weights stay on the same panel.
+        axs[0].set_yscale("symlog", linthresh=max(max(peaks, default=0), 1))
         ate_df = pd.DataFrame(
             [self.get_ate(i, idata, method=method) for i in range(ate_draws)],
             columns=["ATE", "Y(1)", "Y(0)"],
