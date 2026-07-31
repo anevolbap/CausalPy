@@ -310,8 +310,7 @@ def _harness_identity() -> dict[str, str | bool]:
     )
     if harness_sha256 != git_blob_sha256:
         raise HarnessError(
-            "Executing harness bytes do not match the clean Git blob at "
-            f"{commit}."
+            f"Executing harness bytes do not match the clean Git blob at {commit}."
         )
     return {
         "path": str(script_path),
@@ -785,9 +784,7 @@ def _scenario_manifest() -> dict[str, dict[str, Any]]:
     }
     synthetic_counterfactual_coordinates = {
         **sample_coordinates,
-        "obs_ind": [
-            row["t"] for row in SYNTHETIC_CONTROL_RECORDS if row["t"] >= 12
-        ],
+        "obs_ind": [row["t"] for row in SYNTHETIC_CONTROL_RECORDS if row["t"] >= 12],
         "treated_units": ["actual"],
     }
     did_bindings = [
@@ -811,9 +808,7 @@ def _scenario_manifest() -> dict[str, dict[str, Any]]:
     ]
     return {
         "difference_in_differences": {
-            "fixture": _fixture_payload(
-                "fixed_difference_in_differences", DID_RECORDS
-            ),
+            "fixture": _fixture_payload("fixed_difference_in_differences", DID_RECORDS),
             "effect_summary": {
                 "alpha": EFFECT_SUMMARY_ALPHA,
                 "hdi_prob": HDI_PROB,
@@ -880,6 +875,7 @@ def _scenario_manifest() -> dict[str, dict[str, Any]]:
             },
         },
     }
+
 
 def _capture_series(
     name: str,
@@ -1540,16 +1536,22 @@ def _validate_sampling_quality(quality: Any, case_name: str) -> None:
         },
         f"Case {case_name!r} sampling quality",
     )
-    if _require_nonnegative_int(
-        quality["divergences"], f"Case {case_name!r} divergences"
-    ) != 0:
+    if (
+        _require_nonnegative_int(
+            quality["divergences"], f"Case {case_name!r} divergences"
+        )
+        != 0
+    ):
         raise HarnessError(f"Case {case_name!r} is not divergence-free")
     source = quality["tree_depth_source"]
     if source not in {"not-exposed", "reached_max_treedepth", "tree_depth"}:
         raise HarnessError(f"Case {case_name!r} has invalid tree-depth source")
-    if _require_nonnegative_int(
-        quality["tree_depth_events"], f"Case {case_name!r} tree-depth events"
-    ) != 0:
+    if (
+        _require_nonnegative_int(
+            quality["tree_depth_events"], f"Case {case_name!r} tree-depth events"
+        )
+        != 0
+    ):
         raise HarnessError(f"Case {case_name!r} has tree-depth saturation")
     maximum = quality["max_observed_tree_depth"]
     if source == "tree_depth":
@@ -1582,14 +1584,11 @@ def _validate_series(series: Any, expected_name: str, expected: dict[str, Any]) 
         raise HarnessError(f"Series {expected_name!r} semantics differ from manifest")
     metrics = series["metrics"]
     if not isinstance(metrics, list) or len(metrics) != len(expected["metrics"]):
-        raise HarnessError(
-            f"Series {expected_name!r} has the wrong metric cardinality"
-        )
+        raise HarnessError(f"Series {expected_name!r} has the wrong metric cardinality")
     for metric, expected_metric in zip(metrics, expected["metrics"], strict=True):
         _validate_metric(metric)
-        if (
-            metric["id"] != expected_metric["id"]
-            or not _json_equal(metric["selector"], expected_metric["selector"])
+        if metric["id"] != expected_metric["id"] or not _json_equal(
+            metric["selector"], expected_metric["selector"]
         ):
             raise HarnessError(
                 f"Series {expected_name!r} metric selector differs from manifest"
@@ -1911,9 +1910,7 @@ def _repeatability(first: dict[str, Any], second: dict[str, Any]) -> dict[str, A
         "stack": first_provenance["stack"],
         "metric_count": metric_count,
         "passed": not (
-            draw_digest_mismatches
-            or summary_mismatches
-            or sampling_quality_mismatches
+            draw_digest_mismatches or summary_mismatches or sampling_quality_mismatches
         ),
         "mismatched_draw_digest_metric_ids": draw_digest_mismatches,
         "mismatched_summary_metric_ids": summary_mismatches,
@@ -1965,9 +1962,7 @@ def _cross_stack_runtime_gate(
         reference_provenance["runtime"]["prefix"]
         != candidate_provenance["runtime"]["prefix"]
     )
-    same_platform = (
-        reference_provenance["platform"] == candidate_provenance["platform"]
-    )
+    same_platform = reference_provenance["platform"] == candidate_provenance["platform"]
     same_machine = reference_provenance["machine"] == candidate_provenance["machine"]
     same_python = reference_provenance["python"] == candidate_provenance["python"]
     same_python_implementation = (
@@ -2310,8 +2305,7 @@ def render_report(comparison: dict[str, Any]) -> str:
         )
     )
     shared_dependency_versions_match = all(
-        cross_stack_runtime[key]
-        for key in ("same_numpy", "same_pandas", "same_xarray")
+        cross_stack_runtime[key] for key in ("same_numpy", "same_pandas", "same_xarray")
     )
     capture_labels = {
         "reference_first": "PyMC 5 / capture 1",
