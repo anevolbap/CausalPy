@@ -15,7 +15,9 @@
 
 The feature replaces the stock fitters' ``sigma ~ HalfNormal(1)`` likelihood
 prior with ``sigma ~ Exponential(2/s)``, where *s* is the pre-treatment
-standard deviation of the treated data, computed *per treated unit*.
+standard deviation of the treated data, computed *per treated unit*. A unit whose
+spread cannot be estimated falls back to ``s = 1`` with a warning, so data that
+fitted under the legacy default keeps fitting.
 
 The tests use ``mock_pymc_sample`` where model construction is needed and never
 run real MCMC.
@@ -181,8 +183,8 @@ def test_auto_scale_false_preserves_halfnormal_default(mock_pymc_sample, fitter_
 @pytest.mark.integration
 @pytest.mark.filterwarnings("ignore::UserWarning")
 @pytest.mark.parametrize("fitter_cls", FITTERS)
-def test_auto_scale_false_skips_invalid_default_scale(mock_pymc_sample, fitter_cls):
-    """The legacy opt-out does not reject a constant treated pre-period."""
+def test_auto_scale_false_skips_scale_estimation(mock_pymc_sample, fitter_cls):
+    """The legacy opt-out never inspects a constant treated pre-period."""
     df, tt, treated = _make_data([1.0])
     df["treated_0"] = 5.0
     result = cp.SyntheticControl(
@@ -196,6 +198,27 @@ def test_auto_scale_false_skips_invalid_default_scale(mock_pymc_sample, fitter_c
     sigma = _sigma_prior(result)
     assert sigma.distribution == "HalfNormal"
     assert sigma.parameters["sigma"] == 1
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("fitter_cls", FITTERS)
+def test_constant_treated_series_still_fits_with_auto_scaling(
+    mock_pymc_sample, fitter_cls
+):
+    """A constant treated pre-period fits as it did before data scaling."""
+    df, tt, treated = _make_data([1.0])
+    df["treated_0"] = 5.0
+    with pytest.warns(UserWarning, match="Cannot estimate the pre-treatment"):
+        result = cp.SyntheticControl(
+            df,
+            tt,
+            control_units=["a", "b", "c"],
+            treated_units=treated,
+            model=_fitter(fitter_cls),
+        )
+    sigma = _sigma_prior(result)
+    assert sigma.distribution == "Exponential"
+    assert np.asarray(sigma.parameters["lam"]) == 2.0
 
 
 @pytest.mark.integration
@@ -309,40 +332,49 @@ def test_reused_model_recomputes_the_auto_scale(mock_pymc_sample, fitter_cls):
 
 
 @pytest.mark.parametrize("fitter_cls", FITTERS)
-@pytest.mark.parametrize(
-    "invalid_kind",
-    ["constant", "single_observation", "nan", "infinite"],
-)
-def test_invalid_treated_outcome_scales_raise_actionable_error(
-    fitter_cls, invalid_kind
-):
-    """Every non-finite or non-positive per-unit scale is rejected before fit."""
-    if invalid_kind == "single_observation":
-        df, tt, treated = _make_data([1.0], n=2, treatment_time=1)
-    else:
-        df, tt, treated = _make_data([1.0, 10.0])
-        if invalid_kind == "constant":
-            df["treated_0"] = 5.0
-        elif invalid_kind == "nan":
-            df.loc[0, "treated_0"] = np.nan
-        else:
-            df.loc[0, "treated_0"] = np.inf
+@pytest.mark.parametrize("invalid_kind", ["nan", "infinite"])
+def test_non_finite_treated_outcome_raises_actionable_error(fitter_cls, invalid_kind):
+    """A non-finite treated outcome is a data error and is rejected before fit."""
+    df, tt, treated = _make_data([1.0, 10.0])
+    df.loc[0, "treated_0"] = np.nan if invalid_kind == "nan" else np.inf
     X, y = _pre_treatment_design(df, tt, treated)
-    with pytest.raises(ValueError, match="finite and positive") as error:
+    with pytest.raises(ValueError, match="non-finite values") as error:
         _fitter(fitter_cls).priors_from_data(X, y)
     assert "treated_1" not in str(error.value)
     assert "treated_0" in str(error.value)
 
 
 @pytest.mark.parametrize("fitter_cls", FITTERS)
-def test_dimension_only_invalid_scale_uses_index_label(fitter_cls):
+@pytest.mark.parametrize("degenerate_kind", ["constant", "single_observation"])
+def test_unestimable_scale_warns_and_falls_back_per_unit(fitter_cls, degenerate_kind):
+    """A unit with no estimable spread keeps the legacy scale; others do not."""
+    if degenerate_kind == "single_observation":
+        df, tt, treated = _make_data([1.0], n=2, treatment_time=1)
+    else:
+        df, tt, treated = _make_data([1.0, 10.0])
+        df["treated_0"] = 5.0
+    X, y = _pre_treatment_design(df, tt, treated)
+    with pytest.warns(UserWarning, match="Cannot estimate the pre-treatment") as record:
+        priors = _fitter(fitter_cls).priors_from_data(X, y)
+    message = str(record[0].message)
+    assert "treated_0" in message
+    lam = np.asarray(priors["y_hat"].parameters["sigma"].parameters["lam"])
+    assert lam[0] == 2.0
+    if degenerate_kind == "constant":
+        # The healthy unit keeps its own data-derived rate.
+        assert "treated_1" not in message
+        np.testing.assert_allclose(lam[1], _expected_lam(df, tt, treated)[1])
+
+
+@pytest.mark.parametrize("fitter_cls", FITTERS)
+def test_dimension_only_degenerate_scale_uses_index_label(fitter_cls):
     """Dimension-only outcomes report their generated treated-unit index."""
     df, tt, treated = _make_data([1.0])
     X, y = _pre_treatment_design(df, tt, treated)
     y = xr.DataArray(np.ones_like(y.values), dims=["obs_ind", "treated_units"])
-    with pytest.raises(ValueError, match="finite and positive") as error:
+    with pytest.warns(UserWarning, match="Cannot estimate the pre-treatment") as record:
         _fitter(fitter_cls).priors_from_data(X, y)
-    assert "'0'" in str(error.value)
+    assert "'0'" in str(record[0].message)
 
 
 @pytest.mark.parametrize("fitter_cls", FITTERS)
@@ -381,16 +413,16 @@ def test_subclass_default_y_hat_prior_is_not_auto_overridden(fitter_cls):
 
 @pytest.mark.parametrize("fitter_cls", FITTERS)
 @pytest.mark.parametrize(
-    ("scale", "raises"),
+    ("scale", "falls_back"),
     [
         (np.finfo(float).tiny / 2, True),
         (np.finfo(float).max, False),
     ],
 )
 def test_finite_scale_rate_boundaries_are_checked(
-    monkeypatch, fitter_cls, scale, raises
+    monkeypatch, fitter_cls, scale, falls_back
 ):
-    """Rate overflow is rejected while the smallest finite rate remains valid."""
+    """A subnormal spread overflows its rate and falls back; a huge one does not."""
     df, tt, treated = _make_data([1.0])
     X, y = _pre_treatment_design(df, tt, treated)
     monkeypatch.setattr(
@@ -398,9 +430,10 @@ def test_finite_scale_rate_boundaries_are_checked(
         "std",
         lambda *_args, **_kwargs: np.array([scale]),
     )
-    if raises:
-        with pytest.raises(ValueError, match="finite and positive"):
-            _fitter(fitter_cls).priors_from_data(X, y)
+    if falls_back:
+        with pytest.warns(UserWarning, match="Cannot estimate the pre-treatment"):
+            priors = _fitter(fitter_cls).priors_from_data(X, y)
+        assert np.asarray(priors["y_hat"].parameters["sigma"].parameters["lam"]) == 2.0
     else:
         sigma = _fitter(fitter_cls).priors_from_data(X, y)["y_hat"].parameters["sigma"]
         rate = np.asarray(sigma.parameters["lam"])

@@ -657,34 +657,65 @@ class LinearRegression(PyMCModel):
             self.priors["y_hat"].create_likelihood_variable("y_hat", mu=mu, observed=y)
 
 
+#: Fallback outcome scale used when a treated unit's pre-treatment spread cannot
+#: be estimated (a constant series, or fewer than two observations). Keeping the
+#: scale at 1 reproduces the legacy ``HalfNormal(1)`` order of magnitude for
+#: those degenerate units instead of failing a fit that used to work.
+_DEGENERATE_OUTCOME_SCALE = 1.0
+
+
 def _data_scaled_y_hat_prior(y: xr.DataArray) -> Prior:
-    """Build a per-treated-unit observation-noise prior from outcome scale."""
+    """Build a per-treated-unit observation-noise prior from outcome scale.
+
+    Each treated unit's rate is ``2 / s_i``, giving ``sigma_i`` a prior mean of
+    ``s_i / 2``, where ``s_i`` is that unit's sample standard deviation. Units
+    whose spread is not estimable fall back to ``s_i = 1`` with a warning;
+    non-finite outcomes are a data error and are rejected.
+    """
     y_values = np.asarray(
         y.transpose("obs_ind", "treated_units").values,
         dtype=float,
     )
     treated_units = np.asarray(y.get_index("treated_units"))
-    if y_values.shape[0] < 2:
-        scales = np.full(y_values.shape[1], np.nan)
-    else:
-        with np.errstate(invalid="ignore"):
-            scales = np.std(y_values, axis=0, ddof=1)
-    with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
-        rates = 2 / scales
-    invalid = ~np.isfinite(scales) | (scales <= 0) | ~np.isfinite(rates) | (rates <= 0)
-    if np.any(invalid):
-        invalid_units = ", ".join(repr(str(unit)) for unit in treated_units[invalid])
+    non_finite = ~np.isfinite(y_values).all(axis=0)
+    if np.any(non_finite):
         raise ValueError(
-            "Cannot data-scale the y_hat observation-noise prior: fitted outcome "
-            "standard deviations must be finite and positive for treated unit(s) "
-            f"{invalid_units}. Pass a custom y_hat prior; SyntheticControl callers "
-            "can alternatively use auto_scale_sigma=False to retain HalfNormal(1)."
+            "Cannot data-scale the y_hat observation-noise prior: the fitted "
+            "outcome contains non-finite values for treated unit(s) "
+            f"{_format_treated_units(treated_units[non_finite])}. Clean the data, "
+            "or pass a custom y_hat prior; SyntheticControl callers can "
+            "alternatively use auto_scale_sigma=False to retain HalfNormal(1)."
         )
+    if y_values.shape[0] < 2:
+        scales = np.zeros(y_values.shape[1])
+    else:
+        scales = np.std(y_values, axis=0, ddof=1)
+    with np.errstate(divide="ignore", over="ignore"):
+        rates = 2 / scales
+    # A zero (or subnormal) spread carries no scale information, so there is
+    # nothing to calibrate against and the fallback scale is used instead.
+    degenerate = ~np.isfinite(rates) | (rates <= 0)
+    if np.any(degenerate):
+        warnings.warn(
+            "Cannot estimate the pre-treatment outcome scale for treated unit(s) "
+            f"{_format_treated_units(treated_units[degenerate])}; the series is "
+            "constant or has fewer than two observations. Falling back to an "
+            f"observation-noise scale of {_DEGENERATE_OUTCOME_SCALE} for those "
+            "units. Pass a custom y_hat prior to control this explicitly.",
+            UserWarning,
+            stacklevel=2,
+        )
+        rates = np.where(degenerate, 2 / _DEGENERATE_OUTCOME_SCALE, rates)
     return Prior(
         "Normal",
         sigma=Prior("Exponential", lam=rates, dims=["treated_units"]),
         dims=["obs_ind", "treated_units"],
     )
+
+
+def _format_treated_units(units: np.ndarray) -> str:
+    """Render treated-unit labels for use in diagnostics."""
+    return ", ".join(repr(str(unit)) for unit in units)
 
 
 class WeightedSumFitter(PyMCModel):
