@@ -952,6 +952,179 @@ def test_run_keeps_folds_with_one_full_intervention_window(monkeypatch):
     assert result.metadata["skipped_folds"] == []
 
 
+# ===========================================================================
+# Explicit intervention_length tests (unit — no sampling)
+# ===========================================================================
+
+
+def test_intervention_length_defaults_to_none():
+    """Test intervention length defaults to none."""
+    check = PlaceboInTime()
+    assert check.intervention_length is None
+
+
+@pytest.mark.parametrize(
+    "intervention_length",
+    [0, -1, -2.5, pd.Timedelta(0), pd.Timedelta(days=-1)],
+)
+def test_invalid_intervention_length(intervention_length):
+    """Test invalid intervention length."""
+    with pytest.raises(ValueError, match="intervention_length must be positive"):
+        PlaceboInTime(intervention_length=intervention_length)
+
+
+def test_repr_shows_explicit_intervention_length():
+    """Test repr shows explicit intervention length."""
+    check = PlaceboInTime(n_folds=2, intervention_length=10)
+    assert repr(check) == "PlaceboInTime(n_folds=2, intervention_length=10)"
+
+
+def test_repr_omits_derived_intervention_length():
+    """Test repr omits derived intervention length."""
+    assert repr(PlaceboInTime(n_folds=2)) == "PlaceboInTime(n_folds=2)"
+
+
+def test_explicit_intervention_length_overrides_derived_default():
+    """An explicit window length wins over the experiment-derived one."""
+    data = pd.DataFrame({"y": np.zeros(100)}, index=np.arange(100))
+    experiment = _make_fake_bayesian_experiment(data, treatment_time=70)
+
+    assert PlaceboInTime()._compute_intervention_length(experiment) == 29
+    assert (
+        PlaceboInTime(intervention_length=10)._compute_intervention_length(experiment)
+        == 10
+    )
+
+
+def test_explicit_intervention_length_makes_more_folds_eligible(monkeypatch):
+    """A shorter placebo window fits folds that the default would skip."""
+    data = pd.DataFrame({"y": np.zeros(100)}, index=np.arange(100))
+    experiment = _make_fake_bayesian_experiment(data, treatment_time=70)
+    fitted_times: list[int] = []
+
+    def factory(fold_data, treatment_time):
+        fitted_times.append(treatment_time)
+        return _make_fake_bayesian_experiment(fold_data, treatment_time)
+
+    check = PlaceboInTime(
+        n_folds=4,
+        intervention_length=10,
+        experiment_factory=factory,
+    )
+    monkeypatch.setattr(check, "_build_status_quo_model", _fake_status_quo_result)
+
+    with pytest.warns(UserWarning, match="placebo windows span 10 observation"):
+        result = check.run(experiment)
+
+    assert fitted_times == [30, 40, 50, 60]
+    assert result.metadata["n_folds_completed"] == 4
+    assert result.metadata["skipped_folds"] == []
+    assert result.metadata["intervention_length"] == 10
+
+
+def test_comparison_window_metadata_is_recorded():
+    """Both spans behind the verdict are exposed for interpretation."""
+    data = pd.DataFrame({"y": np.zeros(100)}, index=np.arange(100))
+    experiment = _make_fake_bayesian_experiment(data, treatment_time=70)
+
+    def factory(fold_data, treatment_time):  # pragma: no cover - not reached
+        del fold_data, treatment_time
+        raise AssertionError("No eligible fold exists in this configuration.")
+
+    check = PlaceboInTime(n_folds=1, intervention_length=90, experiment_factory=factory)
+
+    with pytest.warns(UserWarning, match="shorter than one full intervention window"):
+        result = check.run(experiment)
+
+    assert result.metadata["comparison_window"] == {
+        "placebo_window_observations": 30,
+        "actual_post_period_observations": 30,
+    }
+    assert result.metadata["intervention_length"] == 90
+
+
+def test_derived_intervention_length_does_not_warn_about_comparison_window(monkeypatch):
+    """The one-observation half-open artefact must stay silent."""
+    data = pd.DataFrame({"y": np.zeros(100)}, index=np.arange(100))
+    experiment = _make_fake_bayesian_experiment(data, treatment_time=75)
+
+    def factory(fold_data, treatment_time):
+        return _make_fake_bayesian_experiment(fold_data, treatment_time)
+
+    check = PlaceboInTime(n_folds=2, experiment_factory=factory)
+    monkeypatch.setattr(check, "_build_status_quo_model", _fake_status_quo_result)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        result = check.run(experiment)
+
+    assert result.metadata["comparison_window"] == {
+        "placebo_window_observations": 24,
+        "actual_post_period_observations": 25,
+    }
+
+
+def test_intervention_length_spanning_no_observations_raises():
+    """An empty placebo window must fail loudly, not fabricate a null."""
+    data = pd.DataFrame({"y": np.zeros(100)}, index=np.arange(100))
+    experiment = _make_fake_bayesian_experiment(data, treatment_time=69.5)
+
+    def factory(fold_data, treatment_time):  # pragma: no cover - not reached
+        del fold_data, treatment_time
+        raise AssertionError("An empty placebo window must fail before fitting.")
+
+    check = PlaceboInTime(
+        n_folds=1, intervention_length=0.4, experiment_factory=factory
+    )
+
+    with pytest.raises(ValueError, match="spans no observations"):
+        check.run(experiment)
+
+
+def test_explicit_intervention_length_with_datetime_index(monkeypatch):
+    """Timedelta windows drive fold geometry on datetime-indexed data."""
+    index = pd.date_range("2020-01-01", periods=100, freq="D")
+    data = pd.DataFrame({"y": np.zeros(100)}, index=index)
+    treatment_time = index[70]
+    experiment = _make_fake_bayesian_experiment(data, treatment_time)
+    fitted_times: list[pd.Timestamp] = []
+
+    def factory(fold_data, fold_treatment_time):
+        fitted_times.append(fold_treatment_time)
+        return _make_fake_bayesian_experiment(fold_data, fold_treatment_time)
+
+    check = PlaceboInTime(
+        n_folds=3,
+        intervention_length=pd.Timedelta(days=10),
+        experiment_factory=factory,
+    )
+    monkeypatch.setattr(check, "_build_status_quo_model", _fake_status_quo_result)
+
+    with pytest.warns(UserWarning, match="placebo windows span 10 observation"):
+        result = check.run(experiment)
+
+    assert fitted_times == [index[40], index[50], index[60]]
+    assert result.metadata["n_folds_completed"] == 3
+
+
+def test_explicit_intervention_length_widens_random_candidate_pool():
+    """Random selection sees the configured window, not the derived one."""
+    data = pd.DataFrame({"y": np.zeros(100)}, index=np.arange(100))
+
+    derived = PlaceboInTime(
+        n_folds=3, selection_method="random", random_seed=42
+    )._compute_random_fold_treatment_times(data, 70, 29)
+    configured = PlaceboInTime(
+        n_folds=3,
+        selection_method="random",
+        intervention_length=10,
+        random_seed=42,
+    )._compute_random_fold_treatment_times(data, 70, 10)
+
+    assert len(derived) < 3
+    assert len(configured) == 3
+
+
 def test_pipeline_run_derives_independent_fold_seeds(monkeypatch):
     """Pipeline-created folds receive deterministic, distinct model seeds."""
     data = pd.DataFrame({"y": np.zeros(100)}, index=np.arange(100))

@@ -57,11 +57,34 @@ logger = logging.getLogger(__name__)
 MIN_FOLD_OBSERVATIONS = 3
 MAX_RANDOM_SELECTION_RETRIES = 16
 
+# Placebo windows are half-open (``[t, t + intervention_length)``) while the
+# actual effect is summarised over the whole post-intervention period.  With
+# the derived default ``intervention_length`` those two spans differ by at most
+# the single observation sitting on the closing edge of the window, which is a
+# geometry artefact rather than a misconfiguration, so the comparison-window
+# warning only fires beyond that.
+COMPARISON_WINDOW_OBSERVATION_TOLERANCE = 1
+
 _DEFAULT_SAMPLE_KWARGS: dict[str, Any] = {
     "draws": 1000,
     "chains": 4,
     "target_accept": 0.97,
 }
+
+
+def _is_non_positive_length(length: Any) -> bool:
+    """Return whether a window length is orderable against zero and not positive.
+
+    Numeric and ``pd.Timedelta`` lengths are compared against a zero of the
+    same kind.  Calendar offsets such as ``pd.DateOffset`` are not orderable,
+    so they pass this check and are validated at run time by the
+    intervention-window observation count in :meth:`PlaceboInTime.run`.
+    """
+    if isinstance(length, pd.Timedelta):
+        return length <= pd.Timedelta(0)
+    if isinstance(length, (int, float, np.integer, np.floating)):
+        return bool(length <= 0)
+    return False
 
 
 @dataclass
@@ -143,7 +166,10 @@ class PlaceboInTime:
     Parameters
     ----------
     n_folds : int, default 3
-        Number of placebo folds to create.  Must be >= 1.
+        Number of placebo folds to create.  Must be >= 1.  Each fold
+        consumes one ``intervention_length`` of pre-treatment history, so on
+        a short pre-period a large ``n_folds`` produces ineligible folds that
+        are skipped; shorten ``intervention_length`` to fit more folds.
     selection_method : {"sequential", "random"}, default "sequential"
         How to choose placebo windows.
 
@@ -163,11 +189,11 @@ class PlaceboInTime:
 
         Note: the eligible pre-period is further shortened because a
         candidate's pseudo-intervention window must also end before the
-        actual treatment.  When ``treatment_end_time`` is not set on
-        the experiment, ``intervention_length`` defaults to
-        ``data.index.max() - treatment_time`` (roughly the post-period
-        length), which can make the effective eligible window much
-        smaller than ``(1 - min_training_pct)`` suggests.
+        actual treatment.  With the derived default
+        ``intervention_length`` (see below) that window is roughly the
+        post-period length, which can make the effective eligible window
+        much smaller than ``(1 - min_training_pct)`` suggests; pass an
+        explicit ``intervention_length`` to widen it.
     min_gap : int, default 1
         *(random mode only)* Minimum number of pre-intervention
         observations between any two selected folds, measured as
@@ -232,6 +258,30 @@ class PlaceboInTime:
         seeds the hierarchical ``pm.sample`` call unless
         ``sample_kwargs["random_seed"]`` is explicitly supplied, which takes
         precedence for that call only.
+    intervention_length : int, float, ``pd.Timedelta`` or ``pd.DateOffset``, optional
+        Length of each placebo intervention window, in index units.  When
+        ``None`` (default) the length is derived from the experiment:
+        ``treatment_end_time - treatment_time`` when the experiment defines
+        an explicit intervention window, otherwise
+        ``data.index.max() - treatment_time`` (roughly the post-period
+        length).
+
+        Set this explicitly to fit more well-supported folds into a short
+        pre-period.  The derived default consumes one post-period worth of
+        history per fold, so when the pre-period is only a few times longer
+        than the post-period the earliest folds fail the eligibility rule
+        above and are skipped.  A shorter ``intervention_length`` shortens
+        both the placebo window and the history each fold requires, so more
+        folds become eligible.
+
+        The actual effect is still summarised over the full
+        post-intervention period, so a window materially shorter than that
+        period compares a long actual cumulative impact against a null built
+        from short windows, which inflates ``P(actual outside null)``.  Both
+        observation counts are recorded in
+        ``metadata["comparison_window"]`` and a warning is emitted when they
+        disagree by more than the one-observation half-open-window artefact
+        of the derived default.
 
     Examples
     --------
@@ -270,9 +320,16 @@ class PlaceboInTime:
         rope_half_width: float | None = None,
         n_design_replications: int | None = None,
         random_seed: int | None = None,
+        intervention_length: Any | None = None,
     ) -> None:
         if n_folds < 1:
             raise ValueError("n_folds must be >= 1")
+        if intervention_length is not None and _is_non_positive_length(
+            intervention_length
+        ):
+            raise ValueError(
+                f"intervention_length must be positive, got {intervention_length!r}"
+            )
         if selection_method not in ("sequential", "random"):
             raise ValueError(
                 f"selection_method must be 'sequential' or 'random', "
@@ -304,6 +361,7 @@ class PlaceboInTime:
         self.rope_half_width = rope_half_width
         self.n_design_replications = n_design_replications
         self.random_seed = random_seed
+        self.intervention_length = intervention_length
 
     def validate(self, experiment: BaseExperiment) -> None:
         """Check the experiment is compatible with PlaceboInTime.
@@ -404,7 +462,10 @@ class PlaceboInTime:
         return _factory
 
     def _compute_intervention_length(self, experiment: BaseExperiment) -> Any:
-        """Compute intervention length from the experiment."""
+        """Return the configured placebo window length, or derive it."""
+        if self.intervention_length is not None:
+            return self.intervention_length
+
         treatment_time = experiment.treatment_time  # type: ignore[attr-defined]
         data = experiment.data  # type: ignore[attr-defined]
 
@@ -643,6 +704,40 @@ class PlaceboInTime:
         intervention_end = treatment_time + intervention_length
         index = data.index
         return int(((index >= treatment_time) & (index < intervention_end)).sum())
+
+    @staticmethod
+    def _describe_comparison_window(
+        data: pd.DataFrame,
+        treatment_time: Any,
+        placebo_window_rows: int,
+    ) -> dict[str, int]:
+        """Compare the placebo window against the actual post-period span.
+
+        The hierarchical null is built from cumulative impacts summed over
+        placebo windows of ``placebo_window_rows`` observations, while the
+        actual cumulative impact is summed over every post-intervention
+        observation.  When the placebo windows are materially shorter the two
+        quantities are not on the same footing and ``P(actual outside null)``
+        is optimistic, so a warning is emitted.
+        """
+        actual_post_period_rows = int((data.index >= treatment_time).sum())
+        excess = actual_post_period_rows - placebo_window_rows
+        if excess > COMPARISON_WINDOW_OBSERVATION_TOLERANCE:
+            warnings.warn(
+                f"PlaceboInTime placebo windows span {placebo_window_rows} "
+                f"observation(s) but the actual effect is summarised over "
+                f"{actual_post_period_rows} post-intervention observation(s). "
+                "The actual cumulative impact therefore accumulates over a "
+                "longer span than the null distribution it is compared "
+                "against, which inflates P(actual outside null). Lengthen "
+                "intervention_length, or interpret the verdict as an upper "
+                "bound.",
+                stacklevel=3,
+            )
+        return {
+            "placebo_window_observations": placebo_window_rows,
+            "actual_post_period_observations": actual_post_period_rows,
+        }
 
     @staticmethod
     def _get_fold_pre_period_observation_counts(
@@ -1035,6 +1130,16 @@ class PlaceboInTime:
         required_pre_period_rows = self._get_intervention_window_observation_count(
             data, treatment_time, intervention_length
         )
+        if required_pre_period_rows < 1:
+            raise ValueError(
+                f"intervention_length={intervention_length!r} spans no "
+                f"observations at treatment_time={treatment_time!r}, so no "
+                "placebo window can be built. Pass a longer "
+                "intervention_length."
+            )
+        comparison_window = self._describe_comparison_window(
+            data, treatment_time, required_pre_period_rows
+        )
 
         actual_cumulative = self._extract_cumulative_impact(experiment)
         actual_cumulative_mean = float(actual_cumulative.mean().values)
@@ -1226,6 +1331,8 @@ class PlaceboInTime:
                     "n_folds_requested": self.n_folds,
                     "n_folds_completed": n_completed,
                     "skipped_folds": skipped_folds,
+                    "intervention_length": intervention_length,
+                    "comparison_window": comparison_window,
                     "rope_half_width": self.rope_half_width,
                     "threshold": self.threshold,
                     "expected_effect_prior": self.expected_effect_prior,
@@ -1274,6 +1381,8 @@ class PlaceboInTime:
             "n_folds_requested": self.n_folds,
             "n_folds_completed": n_completed,
             "skipped_folds": skipped_folds,
+            "intervention_length": intervention_length,
+            "comparison_window": comparison_window,
             "fold_sds": fold_sds,
             "status_quo_idata": idata,
             "null_samples": theta_new_samples,
@@ -1325,6 +1434,8 @@ class PlaceboInTime:
     def __repr__(self) -> str:
         """Return a string representation of the check."""
         parts = [f"n_folds={self.n_folds}"]
+        if self.intervention_length is not None:
+            parts.append(f"intervention_length={self.intervention_length!r}")
         if self.selection_method != "sequential":
             parts.append(f"selection_method={self.selection_method!r}")
         if self.allow_overlap:
