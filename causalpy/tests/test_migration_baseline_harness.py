@@ -1121,3 +1121,43 @@ def test_capture_reproduces_the_fixed_manifest_on_the_installed_stack() -> None:
         for metric in series["metrics"]:
             mean = metric["summary"]["mean"]
             assert 0.0 < mean <= 1.0, f"{series_name} is not a variance ratio: {mean}"
+
+
+def test_harness_identity_binds_the_executing_file_to_its_committed_blob(
+    tmp_path: Path,
+) -> None:
+    """The first gate of every capture must work in a real checkout.
+
+    ``_harness_identity`` is monkeypatched away in every comparator test, so
+    nothing else here would notice if its repository-root, blob-path or
+    cleanliness resolution broke -- and it runs before any sampling, so a
+    coordinator would discover the break only when starting a capture. Load a
+    committed copy from a throwaway repository so the assertion does not depend
+    on the state of the checkout running the tests.
+    """
+    root = tmp_path / "checkout"
+    (root / "scripts" / "migration_baseline").mkdir(parents=True)
+    copy_path = root / "scripts" / "migration_baseline" / "harness.py"
+    copy_path.write_bytes(SCRIPT_PATH.read_bytes())
+    (root / ".gitignore").write_text("__pycache__/\n", encoding="utf-8")
+    git = ["git", "-c", "user.name=test", "-c", "user.email=test@example.com"]
+    subprocess.run([*git, "init", "-q", "."], cwd=root, check=True)
+    subprocess.run([*git, "add", "-A"], cwd=root, check=True)
+    subprocess.run([*git, "commit", "-qm", "harness"], cwd=root, check=True)
+    spec = importlib.util.spec_from_file_location("committed_harness", copy_path)
+    assert spec is not None and spec.loader is not None
+    harness = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = harness
+    spec.loader.exec_module(harness)
+
+    identity = harness._harness_identity()
+
+    assert identity["path"] == str(copy_path)
+    assert identity["sha256"] == identity["git_blob_sha256"]
+    assert identity["sha256"] == harness._sha256_bytes(SCRIPT_PATH.read_bytes())
+    assert harness._COMMIT_PATTERN.fullmatch(str(identity["commit"]))
+    assert identity["checkout_clean"] is True
+
+    copy_path.write_bytes(copy_path.read_bytes() + b"\n# uncommitted edit\n")
+    with pytest.raises(harness.HarnessError, match="must be clean"):
+        harness._harness_identity()
