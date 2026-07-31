@@ -88,7 +88,9 @@ def _valid_artifact(
         "xarray": "2026.1.0",
     }
     cases = []
-    for case_name, manifest in harness._scenario_manifest().items():
+    for case_name, manifest in harness._scenario_manifest(
+        harness.REGISTERED_SAMPLING
+    ).items():
         series = []
         for series_name, series_manifest in manifest["series"].items():
             metrics = []
@@ -173,7 +175,7 @@ def _valid_artifact(
                 "causalpy_editable_target": str(root),
             },
         },
-        "protocol": harness._protocol(True),
+        "protocol": harness._protocol(True, harness.REGISTERED_SAMPLING),
         "cases": cases,
     }
 
@@ -320,14 +322,15 @@ def test_hdi_containment_remains_diagnostic_only() -> None:
 def test_pymc5_singleton_effect_is_canonicalized_before_table_binding() -> None:
     """A PyMC 5-shaped singleton effect must yield the scalar table selector."""
     harness = _load_harness_module()
+    sampling = harness.REGISTERED_SAMPLING
     pymc5_effect = xr.DataArray(
-        np.arange(harness.CHAINS * harness.DRAWS, dtype=float).reshape(
-            harness.CHAINS, harness.DRAWS, 1
+        np.arange(sampling.chains * sampling.draws, dtype=float).reshape(
+            sampling.chains, sampling.draws, 1
         ),
         dims=("chain", "draw", "treated_units"),
         coords={
-            "chain": np.arange(harness.CHAINS),
-            "draw": np.arange(harness.DRAWS),
+            "chain": np.arange(sampling.chains),
+            "draw": np.arange(sampling.draws),
             "treated_units": ["unit_0"],
         },
         name="beta",
@@ -363,6 +366,7 @@ def test_pymc5_singleton_effect_is_canonicalized_before_table_binding() -> None:
         harness._canonical_scalar_effect(pymc5_effect),
         StableArviZ,
         np,
+        sampling,
     )
 
     assert captured["semantics"]["dims"] == ["chain", "draw"]
@@ -379,7 +383,8 @@ def test_pymc5_singleton_effect_is_canonicalized_before_table_binding() -> None:
 def test_tail_ess_probability_is_explicit_across_arviz_api_variants() -> None:
     """Tail ESS must not inherit a version-dependent default probability."""
     harness = _load_harness_module()
-    assert harness._protocol(False)["evidence_validity"]["tail_ess_prob"] == [
+    protocol = harness._protocol(False, harness.REGISTERED_SAMPLING)
+    assert protocol["evidence_validity"]["tail_ess_prob"] == [
         0.05,
         0.95,
     ]
@@ -740,7 +745,7 @@ def test_artifact_validation_rejects_self_reported_tree_depth_saturation(
     quality = artifact["cases"][0]["sampling_quality"]
     quality["tree_depth_source"] = "tree_depth"
     quality["tree_depth_events"] = 0
-    quality["max_observed_tree_depth"] = harness.MAX_TREEDEPTH
+    quality["max_observed_tree_depth"] = harness.REGISTERED_SAMPLING.max_treedepth
 
     with pytest.raises(harness.HarnessError, match="tree-depth saturation"):
         harness._validate_artifact(artifact)

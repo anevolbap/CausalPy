@@ -49,16 +49,7 @@ CAPTURE_ROLES = {
 
 HDI_PROB = 0.94
 EFFECT_SUMMARY_ALPHA = 0.06
-CHAINS = 4
-DRAWS = 1_000
-TUNE = 1_000
 CORES = 1
-MASTER_SEED = 1048
-TARGET_ACCEPT = 0.95
-MAX_TREEDEPTH = 12
-MAX_RHAT = 1.01
-MIN_ESS_BULK = 400.0
-MIN_ESS_TAIL = 400.0
 TAIL_ESS_PROB = (0.05, 0.95)
 
 ABSOLUTE_TOLERANCE_FLOOR = 1e-6
@@ -66,6 +57,41 @@ RELATIVE_TOLERANCE_FLOOR = 1e-4
 MCSE_MULTIPLIER = 4.0
 MAX_STANDARDIZED_DRIFT = 0.1
 DEGENERATE_POSTERIOR_SD = 1e-12
+
+
+@dataclass(frozen=True)
+class SamplingProtocol:
+    """Sampler settings and capture-validity thresholds of one capture run.
+
+    ``REGISTERED_SAMPLING`` is the only protocol that produces migration
+    evidence: every serialized artifact is validated against it. The values are
+    explicit parameters rather than module constants so the capture pipeline can
+    be exercised against the installed stack at a reduced posterior size without
+    mutating the registered protocol.
+    """
+
+    chains: int
+    draws: int
+    tune: int
+    master_seed: int
+    target_accept: float
+    max_treedepth: int
+    max_rhat: float
+    min_ess_bulk: float
+    min_ess_tail: float
+
+
+REGISTERED_SAMPLING = SamplingProtocol(
+    chains=4,
+    draws=1_000,
+    tune=1_000,
+    master_seed=1048,
+    target_accept=0.95,
+    max_treedepth=12,
+    max_rhat=1.01,
+    min_ess_bulk=400.0,
+    min_ess_tail=400.0,
+)
 
 # DifferenceInDifferences requires stable unit labels even when the formula
 # omits them.
@@ -467,30 +493,34 @@ def _capture_runtime_provenance(
     }
 
 
-def _sample_kwargs(pm: Any) -> tuple[dict[str, Any], bool]:
-    """Build the registered serialized-chain sampling configuration."""
-    kwargs: dict[str, Any] = {
-        "chains": CHAINS,
-        "cores": CORES,
-        "draws": DRAWS,
-        "tune": TUNE,
-        "random_seed": MASTER_SEED,
-        "progressbar": False,
-        "target_accept": TARGET_ACCEPT,
-        "max_treedepth": MAX_TREEDEPTH,
-    }
+def _supports_nuts_sampler(pm: Any) -> bool:
+    """Return whether the installed PyMC exposes an explicit NUTS-sampler choice."""
     try:
-        supports_nuts_sampler = (
-            "nuts_sampler" in inspect.signature(pm.sample).parameters
-        )
+        return "nuts_sampler" in inspect.signature(pm.sample).parameters
     except (TypeError, ValueError):
-        supports_nuts_sampler = False
-    if supports_nuts_sampler:
+        return False
+
+
+def _sample_kwargs(pm: Any, sampling: SamplingProtocol) -> dict[str, Any]:
+    """Build the serialized-chain sampling configuration of one protocol."""
+    kwargs: dict[str, Any] = {
+        "chains": sampling.chains,
+        "cores": CORES,
+        "draws": sampling.draws,
+        "tune": sampling.tune,
+        "random_seed": sampling.master_seed,
+        "progressbar": False,
+        "target_accept": sampling.target_accept,
+        "max_treedepth": sampling.max_treedepth,
+    }
+    if _supports_nuts_sampler(pm):
         kwargs["nuts_sampler"] = "pymc"
-    return kwargs, supports_nuts_sampler
+    return kwargs
 
 
-def _protocol(supports_nuts_sampler: bool) -> dict[str, Any]:
+def _protocol(
+    supports_nuts_sampler: bool, sampling: SamplingProtocol
+) -> dict[str, Any]:
     """Return the preregistered protocol recorded in every capture artifact."""
     return {
         "scenario_version": SCENARIO_VERSION,
@@ -505,19 +535,19 @@ def _protocol(supports_nuts_sampler: bool) -> dict[str, Any]:
         },
         "sampling": {
             "sampler": "pymc",
-            "chains": CHAINS,
+            "chains": sampling.chains,
             "cores": CORES,
-            "draws": DRAWS,
-            "tune": TUNE,
-            "master_seed": MASTER_SEED,
-            "target_accept": TARGET_ACCEPT,
-            "max_treedepth": MAX_TREEDEPTH,
+            "draws": sampling.draws,
+            "tune": sampling.tune,
+            "master_seed": sampling.master_seed,
+            "target_accept": sampling.target_accept,
+            "max_treedepth": sampling.max_treedepth,
             "nuts_sampler_argument_used": supports_nuts_sampler,
         },
         "evidence_validity": {
-            "max_rhat": MAX_RHAT,
-            "min_ess_bulk": MIN_ESS_BULK,
-            "min_ess_tail": MIN_ESS_TAIL,
+            "max_rhat": sampling.max_rhat,
+            "min_ess_bulk": sampling.min_ess_bulk,
+            "min_ess_tail": sampling.min_ess_tail,
             "tail_ess_prob": list(TAIL_ESS_PROB),
             "divergences": 0,
             "reject_tree_depth_saturation_when_exposed": True,
@@ -551,7 +581,9 @@ def _group(idata: Any, name: str) -> Any:
     return dataset if dataset is not None else group
 
 
-def _sampling_quality(idata: Any, np: Any) -> dict[str, Any]:
+def _sampling_quality(
+    idata: Any, np: Any, sampling: SamplingProtocol
+) -> dict[str, Any]:
     """Reject divergent or tree-depth-saturated chains before comparing outputs."""
     sample_stats = _group(idata, "sample_stats")
     if "diverging" not in sample_stats:
@@ -573,7 +605,7 @@ def _sampling_quality(idata: Any, np: Any) -> dict[str, Any]:
     elif "tree_depth" in sample_stats:
         tree_depth = np.asarray(sample_stats["tree_depth"].values, dtype=int)
         max_observed_tree_depth = int(tree_depth.max())
-        tree_depth_events = int((tree_depth >= MAX_TREEDEPTH).sum())
+        tree_depth_events = int((tree_depth >= sampling.max_treedepth).sum())
         tree_depth_status = "tree_depth"
     if tree_depth_events:
         raise HarnessError(
@@ -630,12 +662,15 @@ def _tail_ess(draws: Any, az: Any) -> Any:
         ) from error
 
 
-def _summary_from_draws(draws: Any, az: Any, np: Any, label: str) -> dict[str, float]:
+def _summary_from_draws(
+    draws: Any, az: Any, np: Any, label: str, sampling: SamplingProtocol
+) -> dict[str, float]:
     """Summarize one chain-by-draw scalar with validity diagnostics."""
     values = np.asarray(draws, dtype=float)
-    if values.shape != (CHAINS, DRAWS):
+    expected_shape = (sampling.chains, sampling.draws)
+    if values.shape != expected_shape:
         raise HarnessError(
-            f"{label} must have shape ({CHAINS}, {DRAWS}), got {values.shape}"
+            f"{label} must have shape {expected_shape}, got {values.shape}"
         )
     if not np.isfinite(values).all():
         raise HarnessError(f"{label} contains non-finite posterior draws")
@@ -667,17 +702,19 @@ def _summary_from_draws(draws: Any, az: Any, np: Any, label: str) -> dict[str, f
         raise HarnessError(f"{label} has a non-positive R-hat")
     if summary["hdi_lower"] > summary["hdi_upper"]:
         raise HarnessError(f"{label} has inverted {HDI_PROB:.2f} HDI bounds")
-    if summary["rhat"] > MAX_RHAT:
+    if summary["rhat"] > sampling.max_rhat:
         raise HarnessError(
-            f"{label} has R-hat {summary['rhat']:.6g}, above {MAX_RHAT:.6g}"
+            f"{label} has R-hat {summary['rhat']:.6g}, above {sampling.max_rhat:.6g}"
         )
-    if summary["ess_bulk"] < MIN_ESS_BULK:
+    if summary["ess_bulk"] < sampling.min_ess_bulk:
         raise HarnessError(
-            f"{label} has bulk ESS {summary['ess_bulk']:.6g}, below {MIN_ESS_BULK:.6g}"
+            f"{label} has bulk ESS {summary['ess_bulk']:.6g}, "
+            f"below {sampling.min_ess_bulk:.6g}"
         )
-    if summary["ess_tail"] < MIN_ESS_TAIL:
+    if summary["ess_tail"] < sampling.min_ess_tail:
         raise HarnessError(
-            f"{label} has tail ESS {summary['ess_tail']:.6g}, below {MIN_ESS_TAIL:.6g}"
+            f"{label} has tail ESS {summary['ess_tail']:.6g}, "
+            f"below {sampling.min_ess_tail:.6g}"
         )
     return summary
 
@@ -760,11 +797,11 @@ def _effect_table_manifest(index: list[str]) -> dict[str, Any]:
     }
 
 
-def _scenario_manifest() -> dict[str, dict[str, Any]]:
+def _scenario_manifest(sampling: SamplingProtocol) -> dict[str, dict[str, Any]]:
     """Return the immutable fixed-output contract derived from fixture records."""
     sample_coordinates = {
-        "chain": list(range(CHAINS)),
-        "draw": list(range(DRAWS)),
+        "chain": list(range(sampling.chains)),
+        "draw": list(range(sampling.draws)),
     }
     did_counterfactual_count = sum(
         row["group"] == 1 and row["post_treatment"] for row in DID_RECORDS
@@ -882,6 +919,7 @@ def _capture_series(
     data: Any,
     az: Any,
     np: Any,
+    sampling: SamplingProtocol,
     *,
     expected_dims: tuple[str, ...] | None = None,
     expected_name: str | None = None,
@@ -918,7 +956,7 @@ def _capture_series(
                 "id": metric_name,
                 "selector": selector,
                 "draw_digest": _draw_digest(draws, np),
-                "summary": _summary_from_draws(draws, az, np, metric_name),
+                "summary": _summary_from_draws(draws, az, np, metric_name, sampling),
             }
         )
     return {"name": name, "semantics": semantics, "metrics": metrics}
@@ -1069,7 +1107,7 @@ def _verify_effect_table(
 
 
 def _capture_difference_in_differences(
-    dependencies: dict[str, Any], sample_kwargs: dict[str, Any]
+    dependencies: dict[str, Any], sampling: SamplingProtocol
 ) -> dict[str, Any]:
     """Capture a representative coefficient-based counterfactual analysis."""
     cp = dependencies["cp"]
@@ -1077,6 +1115,7 @@ def _capture_difference_in_differences(
     pd = dependencies["pd"]
     xr = dependencies["xr"]
     az = dependencies["az"]
+    sample_kwargs = _sample_kwargs(dependencies["pm"], sampling)
 
     data = pd.DataFrame(_records_payload(DID_RECORDS))
     result = cp.DifferenceInDifferences(
@@ -1086,7 +1125,7 @@ def _capture_difference_in_differences(
         group_variable_name="group",
         model=cp.pymc_models.LinearRegression(sample_kwargs=dict(sample_kwargs)),
     )
-    quality = _sampling_quality(result.idata, np)
+    quality = _sampling_quality(result.idata, np, sampling)
     effect_summary = result.effect_summary(alpha=EFFECT_SUMMARY_ALPHA)
     fitted_mu = result._model_backend.predict(result.design["X"])
     draw_wise_r2 = _draw_wise_r2(result.design["y"], fitted_mu, xr, np)
@@ -1097,13 +1136,15 @@ def _capture_difference_in_differences(
             _canonical_scalar_effect(result.causal_impact),
             az,
             np,
+            sampling,
         ),
-        _capture_series("did.draw_wise_r2", draw_wise_r2, az, np),
+        _capture_series("did.draw_wise_r2", draw_wise_r2, az, np, sampling),
         _capture_series(
             "did.counterfactual_mu",
             result.y_pred_counterfactual,
             az,
             np,
+            sampling,
             expected_dims=("chain", "draw", "obs_ind", "treated_units"),
             expected_name="mu",
         ),
@@ -1138,7 +1179,7 @@ def _capture_difference_in_differences(
 
 
 def _capture_synthetic_control(
-    dependencies: dict[str, Any], sample_kwargs: dict[str, Any]
+    dependencies: dict[str, Any], sampling: SamplingProtocol
 ) -> dict[str, Any]:
     """Capture a representative simplex-weighted counterfactual analysis."""
     cp = dependencies["cp"]
@@ -1146,6 +1187,7 @@ def _capture_synthetic_control(
     pd = dependencies["pd"]
     xr = dependencies["xr"]
     az = dependencies["az"]
+    sample_kwargs = _sample_kwargs(dependencies["pm"], sampling)
 
     data = pd.DataFrame(_records_payload(SYNTHETIC_CONTROL_RECORDS)).set_index("t")
     result = cp.SyntheticControl(
@@ -1155,7 +1197,7 @@ def _capture_synthetic_control(
         treated_units=["actual"],
         model=cp.pymc_models.WeightedSumFitter(sample_kwargs=dict(sample_kwargs)),
     )
-    quality = _sampling_quality(result.idata, np)
+    quality = _sampling_quality(result.idata, np, sampling)
     effect_summary = result.effect_summary(
         alpha=EFFECT_SUMMARY_ALPHA,
         cumulative=True,
@@ -1166,14 +1208,19 @@ def _capture_synthetic_control(
     draw_wise_r2 = _draw_wise_r2(result.pre_design["treated"], result.pre_pred, xr, np)
 
     series = [
-        _capture_series("sc.post_average_impact", post_average_impact, az, np),
-        _capture_series("sc.post_cumulative_impact", post_cumulative_impact, az, np),
-        _capture_series("sc.draw_wise_r2", draw_wise_r2, az, np),
+        _capture_series(
+            "sc.post_average_impact", post_average_impact, az, np, sampling
+        ),
+        _capture_series(
+            "sc.post_cumulative_impact", post_cumulative_impact, az, np, sampling
+        ),
+        _capture_series("sc.draw_wise_r2", draw_wise_r2, az, np, sampling),
         _capture_series(
             "sc.counterfactual_mu",
             result.post_pred,
             az,
             np,
+            sampling,
             expected_dims=("chain", "draw", "obs_ind", "treated_units"),
             expected_name="mu",
         ),
@@ -1260,11 +1307,9 @@ def _capture_artifact(
     dependencies = _import_capture_dependencies(resolved_root)
     runtime_provenance = _capture_runtime_provenance(stack, dependencies, resolved_root)
     cp = dependencies["cp"]
-    pm = dependencies["pm"]
-    sample_kwargs, supports_nuts_sampler = _sample_kwargs(pm)
     cases = [
-        _capture_difference_in_differences(dependencies, sample_kwargs),
-        _capture_synthetic_control(dependencies, sample_kwargs),
+        _capture_difference_in_differences(dependencies, REGISTERED_SAMPLING),
+        _capture_synthetic_control(dependencies, REGISTERED_SAMPLING),
     ]
     artifact = {
         "schema_version": ARTIFACT_SCHEMA_VERSION,
@@ -1291,7 +1336,9 @@ def _capture_artifact(
             "machine": platform.machine(),
             **runtime_provenance,
         },
-        "protocol": _protocol(supports_nuts_sampler),
+        "protocol": _protocol(
+            _supports_nuts_sampler(dependencies["pm"]), REGISTERED_SAMPLING
+        ),
         "cases": cases,
     }
     _validate_artifact(
@@ -1478,11 +1525,11 @@ def _validate_metric(metric: dict[str, Any]) -> None:
         raise HarnessError(f"Metric {metric_id!r} has a non-positive R-hat")
     if values["hdi_lower"] > values["hdi_upper"]:
         raise HarnessError(f"Metric {metric_id!r} has inverted HDI bounds")
-    if values["rhat"] > MAX_RHAT:
+    if values["rhat"] > REGISTERED_SAMPLING.max_rhat:
         raise HarnessError(f"Metric {metric_id!r} exceeds the registered R-hat")
-    if values["ess_bulk"] < MIN_ESS_BULK:
+    if values["ess_bulk"] < REGISTERED_SAMPLING.min_ess_bulk:
         raise HarnessError(f"Metric {metric_id!r} fails the registered bulk ESS")
-    if values["ess_tail"] < MIN_ESS_TAIL:
+    if values["ess_tail"] < REGISTERED_SAMPLING.min_ess_tail:
         raise HarnessError(f"Metric {metric_id!r} fails the registered tail ESS")
 
 
@@ -1558,7 +1605,7 @@ def _validate_sampling_quality(quality: Any, case_name: str) -> None:
         maximum = _require_nonnegative_int(
             maximum, f"Case {case_name!r} maximum tree depth"
         )
-        if maximum >= MAX_TREEDEPTH:
+        if maximum >= REGISTERED_SAMPLING.max_treedepth:
             raise HarnessError(f"Case {case_name!r} has tree-depth saturation")
     elif maximum is not None:
         raise HarnessError(
@@ -1610,7 +1657,7 @@ def _validate_case(case: dict[str, Any]) -> None:
         "Case",
     )
     case_name = _require_string(case["name"], "Case name")
-    manifest = _scenario_manifest()
+    manifest = _scenario_manifest(REGISTERED_SAMPLING)
     if case_name not in manifest:
         raise HarnessError(f"Case {case_name!r} is not registered")
     expected = manifest[case_name]
@@ -1801,15 +1848,20 @@ def _validate_artifact(
         protocol = artifact["protocol"]
         if not isinstance(protocol, dict):
             raise HarnessError("Artifact is missing the preregistered protocol")
-        sampling = protocol.get("sampling")
-        if not isinstance(sampling, dict) or not isinstance(
-            sampling.get("nuts_sampler_argument_used"), bool
+        sampling_record = protocol.get("sampling")
+        if not isinstance(sampling_record, dict) or not isinstance(
+            sampling_record.get("nuts_sampler_argument_used"), bool
         ):
             raise HarnessError("Artifact has an invalid NUTS sampler capability flag")
-        if not _json_equal(protocol, _protocol(sampling["nuts_sampler_argument_used"])):
+        if not _json_equal(
+            protocol,
+            _protocol(
+                sampling_record["nuts_sampler_argument_used"], REGISTERED_SAMPLING
+            ),
+        ):
             raise HarnessError("Artifact protocol differs from the registered protocol")
         cases = _case_map(artifact)
-        manifest = _scenario_manifest()
+        manifest = _scenario_manifest(REGISTERED_SAMPLING)
         if set(cases) != set(manifest):
             raise HarnessError(
                 f"Artifact cases must be {sorted(manifest)!r}, got {sorted(cases)!r}"
@@ -2338,7 +2390,7 @@ def render_report(comparison: dict[str, Any]) -> str:
         "## Pre-registered protocol",
         "",
         f"- Explicit HDI probability: `{HDI_PROB}` (`alpha={EFFECT_SUMMARY_ALPHA}`).",
-        f"- Sampling: PyMC NUTS, `{CHAINS}` serialized chains (`cores={CORES}`), `{TUNE}` tune iterations, `{DRAWS}` retained draws, master seed `{MASTER_SEED}`, target acceptance `{TARGET_ACCEPT}`, maximum tree depth `{MAX_TREEDEPTH}`.",
+        f"- Sampling: PyMC NUTS, `{REGISTERED_SAMPLING.chains}` serialized chains (`cores={CORES}`), `{REGISTERED_SAMPLING.tune}` tune iterations, `{REGISTERED_SAMPLING.draws}` retained draws, master seed `{REGISTERED_SAMPLING.master_seed}`, target acceptance `{REGISTERED_SAMPLING.target_accept}`, maximum tree depth `{REGISTERED_SAMPLING.max_treedepth}`.",
         "- `cores=1` is mandatory on local macOS to avoid Accelerate/numba fork failures and intentionally retained on every platform to serialize the chain schedule.",
         "- The harness captures a coefficient-based Difference-in-Differences scenario and a simplex-weighted Synthetic Control scenario from fixed serialized input records embedded in each artifact.",
         "- Every captured scalar must be finite, divergence-free, non-tree-depth-saturated when that statistic is exposed, have rank R-hat at most 1.01, and have bulk and tail ESS at least 400 before it is evidence.",
