@@ -764,9 +764,18 @@ class WeightedSumFitter(PyMCModel):
         \mu &= X \cdot \beta \\
         y &\sim \operatorname{Normal}(\mu, \sigma)
 
-    The rate gives :math:`\sigma_i` a prior mean of :math:`s_i / 2`. A custom
-    ``y_hat`` prior takes precedence. ``SyntheticControl`` can retain the legacy
-    ``HalfNormal(1)`` prior for a fit with ``auto_scale_sigma=False``.
+    The rate gives :math:`\sigma_i` a prior mean of :math:`s_i / 2`, so the
+    prior says the same thing about the noise whatever units the outcome is in.
+    The fixed ``HalfNormal(1)`` used before only suited outcomes on a unit-ish
+    scale: on a larger outcome it pushed the posterior :math:`\sigma` far into
+    its own tail, which narrows the ridge NUTS has to explore and costs both
+    effective sample size and wall time. A treated unit whose pre-treatment
+    series is constant has no estimable :math:`s_i`, so it falls back to
+    :math:`s_i = 1` and warns.
+
+    A custom ``y_hat`` prior, or one declared as a subclass default, takes
+    precedence. ``SyntheticControl(auto_scale_sigma=False)`` keeps the legacy
+    ``HalfNormal(1)`` prior.
 
     Examples
     --------
@@ -919,11 +928,13 @@ class SoftmaxWeightedSumFitter(PyMCModel):
         \mu &= X \cdot \beta \\
         y &\sim \mathrm{Normal}(\mu, \sigma_y) \\
 
-    At fit time, the stock fitter assigns each treated outcome an independent
-    observation-noise prior ``Exponential(lam=2 / s_i)``, where ``s_i`` is that
-    outcome's sample standard deviation. A custom ``y_hat`` prior takes
-    precedence. ``SyntheticControl(auto_scale_sigma=False)`` retains the legacy
-    ``HalfNormal(1)`` prior for a fit.
+    At fit time each treated outcome gets an independent observation-noise prior
+    ``Exponential(lam=2 / s_i)``, where ``s_i`` is that outcome's sample standard
+    deviation, so the prior means the same thing whatever units the outcome is
+    in. See :class:`WeightedSumFitter` for the rationale and the constant-series
+    fallback. A custom ``y_hat`` prior, or one declared as a subclass default,
+    takes precedence, and ``SyntheticControl(auto_scale_sigma=False)`` retains
+    the legacy ``HalfNormal(1)`` prior.
 
     Notes
     -----
