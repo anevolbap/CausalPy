@@ -25,7 +25,11 @@ from sklearn.base import RegressorMixin
 from causalpy._arviz_compat import hdi_bounds
 from causalpy.constants import HDI_PROB, LEGEND_FONT_SIZE
 from causalpy.custom_exceptions import BadIndexException
-from causalpy.date_utils import _combine_datetime_indices, format_date_axes
+from causalpy.date_utils import (
+    _combine_datetime_indices,
+    format_date_axes,
+    validate_treatment_time_against_index,
+)
 from causalpy.experiments.model_adapter import build_coords
 from causalpy.formula_utils import build_design_matrices, build_formula_matrices
 from causalpy.plot_utils import (
@@ -263,50 +267,11 @@ class InterruptedTimeSeries(BaseExperiment):
                 "data.index must be unique and monotonically increasing. "
                 "Sort the data and remove duplicate index values before fitting."
             )
-        if pd.isna(treatment_time):
-            raise BadIndexException("treatment_time must not be missing.")
-        if isinstance(data.index, pd.DatetimeIndex) and not isinstance(
-            treatment_time, pd.Timestamp
-        ):
-            raise BadIndexException(
-                "If data.index is DatetimeIndex, treatment_time must be pd.Timestamp."
-            )
-        if not isinstance(data.index, pd.DatetimeIndex) and isinstance(
-            treatment_time, pd.Timestamp
-        ):
-            raise BadIndexException(
-                "If data.index is not DatetimeIndex, treatment_time must be pd.Timestamp."  # noqa: E501
-            )
-        if (
-            isinstance(data.index, pd.DatetimeIndex)
-            and data.index.tz != treatment_time.tz  # type: ignore[union-attr]
-        ):
-            raise BadIndexException(
-                "treatment_time timezone must match the data.index timezone."
-            )
+        validate_treatment_time_against_index(data.index, treatment_time)
         if treatment_end_time is not None:
-            if pd.isna(treatment_end_time):
-                raise BadIndexException("treatment_end_time must not be missing.")
-            # Validate treatment_end_time matches index type
-            if isinstance(data.index, pd.DatetimeIndex) and not isinstance(
-                treatment_end_time, pd.Timestamp
-            ):
-                raise BadIndexException(
-                    "If data.index is DatetimeIndex, treatment_end_time must be pd.Timestamp."
-                )
-            if not isinstance(data.index, pd.DatetimeIndex) and isinstance(
-                treatment_end_time, pd.Timestamp
-            ):
-                raise BadIndexException(
-                    "If data.index is not DatetimeIndex, treatment_end_time must not be pd.Timestamp."
-                )
-            if (
-                isinstance(data.index, pd.DatetimeIndex)
-                and data.index.tz != treatment_end_time.tz  # type: ignore[union-attr]
-            ):
-                raise BadIndexException(
-                    "treatment_end_time timezone must match the data.index timezone."
-                )
+            validate_treatment_time_against_index(
+                data.index, treatment_end_time, name="treatment_end_time"
+            )
             # Validate treatment_end_time > treatment_time
             # Type check: we've already validated both match the index type, so they're compatible
             # NOTE: Both treatment_time and treatment_end_time are INCLUSIVE (>=) in their respective periods

@@ -23,8 +23,11 @@ from matplotlib import pyplot as plt
 from sklearn.base import RegressorMixin
 
 from causalpy.constants import HDI_PROB, LEGEND_FONT_SIZE
-from causalpy.custom_exceptions import BadIndexException
-from causalpy.date_utils import _combine_datetime_indices, format_date_axes
+from causalpy.date_utils import (
+    _combine_datetime_indices,
+    format_date_axes,
+    validate_treatment_time_against_index,
+)
 from causalpy.experiments.model_adapter import build_coords
 from causalpy.plot_utils import (
     _PosteriorPlotStyle,
@@ -334,27 +337,7 @@ class SyntheticControl(BaseExperiment):
         treatment_time : int, float, or pd.Timestamp
             The treatment time, expected to be compatible with ``data.index``.
         """
-        if pd.isna(treatment_time):
-            raise BadIndexException("treatment_time must not be missing.")
-        if isinstance(data.index, pd.DatetimeIndex) and not isinstance(
-            treatment_time, pd.Timestamp
-        ):
-            raise BadIndexException(
-                "If data.index is DatetimeIndex, treatment_time must be pd.Timestamp."
-            )
-        if not isinstance(data.index, pd.DatetimeIndex) and isinstance(
-            treatment_time, pd.Timestamp
-        ):
-            raise BadIndexException(
-                "If data.index is not DatetimeIndex, treatment_time must be pd.Timestamp."  # noqa: E501
-            )
-        if (
-            isinstance(data.index, pd.DatetimeIndex)
-            and data.index.tz != treatment_time.tz  # type: ignore[union-attr]
-        ):
-            raise BadIndexException(
-                "treatment_time timezone must match the data.index timezone."
-            )
+        validate_treatment_time_against_index(data.index, treatment_time)
 
     def _pre_treatment_correlations(self) -> dict[str, float]:
         """Compute Pearson correlation between each treated unit and its
