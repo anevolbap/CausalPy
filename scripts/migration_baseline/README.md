@@ -49,17 +49,22 @@ Run the four capture commands as independent processes from a clean, committed h
 
 The coordinator must provision `PYMC6_ROOT` as a separate clean detached worktree at `18a524a1a8512aaa21c46e0ccddbc54501c9eb1a` and install it into its own editable-install prefix. Do not use the committed `migration/1048-baseline-harness` checkout as `PYMC6_ROOT`: its source `HEAD` intentionally differs from the migration candidate.
 
+Set the six coordinator variables below to your own locations. `WORKTREES` is any
+directory outside every CausalPy checkout; `MAMBA` is whichever environment
+manager provides the two prefixes.
+
 ```bash
 set -euo pipefail
 
-MAMBA=/opt/anaconda3/condabin/mamba
-MIGRATION_ROOT=/Users/carlostrujillo/Documents/GitHub/_worktrees/CausalPy-1048-baselines
-PYMC5_ROOT=/Users/carlostrujillo/Documents/GitHub/_worktrees/CausalPy-1048-pymc5
-PYMC5_PREFIX=/Users/carlostrujillo/Documents/GitHub/_worktrees/.mamba/CausalPy-1048-pymc5
-PYMC6_ROOT=/Users/carlostrujillo/Documents/GitHub/_worktrees/CausalPy-1048-pymc6
-PYMC6_PREFIX=/Users/carlostrujillo/Documents/GitHub/_worktrees/.mamba/CausalPy-1048-pymc6
+MAMBA="$(command -v mamba)"
+WORKTREES="${WORKTREES:?set to a directory outside every CausalPy checkout}"
+MIGRATION_ROOT="$WORKTREES/CausalPy-1048-baselines"
+PYMC5_ROOT="$WORKTREES/CausalPy-1048-pymc5"
+PYMC5_PREFIX="$WORKTREES/.mamba/CausalPy-1048-pymc5"
+PYMC6_ROOT="$WORKTREES/CausalPy-1048-pymc6"
+PYMC6_PREFIX="$WORKTREES/.mamba/CausalPy-1048-pymc6"
 BATCH_ID="$(uuidgen | tr '[:upper:]' '[:lower:]')"
-EVIDENCE_ROOT="/Users/carlostrujillo/Documents/GitHub/_worktrees/migration-baseline-v2-${BATCH_ID}"
+EVIDENCE_ROOT="$WORKTREES/migration-baseline-v2-${BATCH_ID}"
 HARNESS="$MIGRATION_ROOT/scripts/migration_baseline/harness.py"
 
 mkdir "$EVIDENCE_ROOT"
@@ -88,6 +93,18 @@ mkdir "$EVIDENCE_ROOT"
 The comparator requires four distinct paths, exact role order, one shared batch UUID, and four distinct capture UUIDs. It reads each JSON input once, hashes that exact byte buffer, and carries the buffer-derived hash into the report. It verifies exact raw-draw digests, posterior summaries, and sampling-quality evidence only within each stack; a mismatch makes the entire comparison fail as non-deterministic evidence. It never compares a PyMC 5 digest or raw draw with a PyMC 6 digest or raw draw.
 
 A failed numerical comparison writes its fresh JSON decision and Markdown report, then exits with status `1`; malformed or invalid evidence exits with status `2`. The generated report records all four artifact paths and byte hashes, role/batch identity, clean checkout result, comparator identity, imported runtime provenance, and actual finite/convergence diagnostics. Attach it and its four input artifacts to #1048 with the command log. The static attachment outline is in [REPORT_TEMPLATE.md](REPORT_TEMPLATE.md).
+
+## Continuous verification of the capture path
+
+`causalpy/tests/test_migration_baseline_harness.py` runs both fixed scenarios end
+to end against the installed stack on every CI run, at a reduced posterior size
+with relaxed convergence thresholds, and asserts that the captured fixtures,
+effect-table bindings, series semantics, metric selectors and sampling-quality
+evidence reproduce the manifest exactly. That reduced protocol is never
+serialized as evidence: `REGISTERED_SAMPLING` is the only protocol `capture`
+uses and the only one `compare` validates against. Its purpose is to fail fast
+when a CausalPy or ArviZ API the capture path depends on drifts, instead of
+after hours of coordinator sampling.
 
 ## Registered migration decision gates
 
