@@ -981,3 +981,139 @@ def test_capture_command_rejects_existing_destination_before_sampling(
 
     with pytest.raises(harness.HarnessError, match="already exists"):
         harness._capture_command(args)
+
+
+def test_registered_manifest_sample_coordinates_track_the_registered_protocol() -> None:
+    """The fixed output manifest must describe the registered posterior size."""
+    harness = _load_harness_module()
+    sampling = harness.REGISTERED_SAMPLING
+    manifest = harness._scenario_manifest(sampling)
+
+    for case in manifest.values():
+        for series in case["series"].values():
+            coords = series["semantics"]["coords"]
+            assert coords["chain"] == list(range(sampling.chains))
+            assert coords["draw"] == list(range(sampling.draws))
+            assert series["semantics"]["shape"][:2] == [
+                sampling.chains,
+                sampling.draws,
+            ]
+
+
+# A reduced posterior with relaxed convergence thresholds. This protocol never
+# produces migration evidence: it exists so the capture path -- the CausalPy
+# public API calls, the 0.94 HDI extraction, the draw-wise R-squared, the
+# counterfactual dimensions and the effect-table binding check -- is executed
+# against the installed stack in ordinary CI time. The registered thresholds of
+# REGISTERED_SAMPLING are what every serialized artifact is validated against.
+VERIFICATION_SAMPLING_FIELDS = {
+    "chains": 2,
+    "draws": 500,
+    "tune": 500,
+    "max_rhat": 1.05,
+    "min_ess_bulk": 100.0,
+    "min_ess_tail": 100.0,
+}
+
+
+def _verification_sampling(harness):
+    registered = harness.REGISTERED_SAMPLING
+    return harness.SamplingProtocol(
+        master_seed=registered.master_seed,
+        target_accept=registered.target_accept,
+        max_treedepth=registered.max_treedepth,
+        **VERIFICATION_SAMPLING_FIELDS,
+    )
+
+
+def _assert_case_matches_manifest(harness, case: dict[str, Any], expected) -> None:
+    """Assert a captured case reproduces its fixed manifest contract exactly."""
+    assert harness._json_equal(case["fixture"], expected["fixture"])
+    assert harness._json_equal(case["counterfactual"], expected["counterfactual"])
+    assert case["effect_summary"]["alpha"] == expected["effect_summary"]["alpha"]
+    assert case["effect_summary"]["hdi_prob"] == harness.HDI_PROB
+    assert harness._json_equal(
+        case["effect_summary"]["metric_bindings"],
+        expected["effect_summary"]["metric_bindings"],
+    )
+    assert (
+        case["effect_summary"]["table"]["index"]
+        == (expected["effect_summary"]["table"]["index"])
+    )
+    assert harness._json_equal(
+        case["effect_summary"]["table"]["hdi"],
+        expected["effect_summary"]["table"]["hdi"],
+    )
+
+    captured_series = {series["name"]: series for series in case["series"]}
+    assert set(captured_series) == set(expected["series"])
+    for name, expected_series in expected["series"].items():
+        series = captured_series[name]
+        assert harness._json_equal(series["semantics"], expected_series["semantics"]), (
+            f"{name} semantics drifted from the fixed manifest"
+        )
+        assert [metric["id"] for metric in series["metrics"]] == [
+            metric["id"] for metric in expected_series["metrics"]
+        ]
+        assert [metric["selector"] for metric in series["metrics"]] == [
+            metric["selector"] for metric in expected_series["metrics"]
+        ]
+
+    assert case["sampling_quality"]["divergences"] == 0
+    assert case["sampling_quality"]["finite_values"] is True
+
+
+@pytest.mark.slow
+@pytest.mark.integration
+def test_capture_reproduces_the_fixed_manifest_on_the_installed_stack() -> None:
+    """Both fixed scenarios must actually capture against the installed CausalPy.
+
+    Every other test in this module drives the harness with synthesized
+    artifacts, so nothing else here would notice if the CausalPy public API the
+    capture path depends on (``effect_summary(alpha=...)``,
+    ``_model_backend.predict``, ``design``/``pre_design``, ``causal_impact``,
+    ``y_pred_counterfactual``, ``post_impact``, ``pre_pred``/``post_pred``) or
+    the ArviZ HDI/ESS API drifted. Without this, such a break would surface only
+    after hours of coordinator sampling.
+    """
+    harness = _load_harness_module()
+    sampling = _verification_sampling(harness)
+    dependencies = harness._import_capture_dependencies(REPO_ROOT)
+    manifest = harness._scenario_manifest(sampling)
+
+    captured = {
+        "difference_in_differences": harness._capture_difference_in_differences(
+            dependencies, sampling
+        ),
+        "synthetic_control": harness._capture_synthetic_control(dependencies, sampling),
+    }
+    assert set(captured) == set(manifest)
+    for case_name, case in captured.items():
+        assert case["name"] == case_name
+        _assert_case_matches_manifest(harness, case, manifest[case_name])
+
+    did_series = {
+        series["name"]: series
+        for series in captured["difference_in_differences"]["series"]
+    }
+    treatment_effect = did_series["did.causal_impact"]["metrics"][0]["summary"]
+    assert treatment_effect["mean"] > 0, (
+        "the fixed DiD fixture encodes a positive treatment effect"
+    )
+    assert treatment_effect["hdi_lower"] < treatment_effect["hdi_upper"]
+
+    synthetic_series = {
+        series["name"]: series for series in captured["synthetic_control"]["series"]
+    }
+    average_impact = synthetic_series["sc.post_average_impact"]["metrics"][0]["summary"]
+    assert average_impact["hdi_lower"] > 0, (
+        "the fixed synthetic-control fixture encodes a positive post-period impact"
+    )
+
+    for series_name, series in (
+        ("did.draw_wise_r2", did_series["did.draw_wise_r2"]),
+        ("sc.draw_wise_r2", synthetic_series["sc.draw_wise_r2"]),
+    ):
+        for metric in series["metrics"]:
+            mean = metric["summary"]["mean"]
+            assert 0.0 < mean <= 1.0, f"{series_name} is not a variance ratio: {mean}"
