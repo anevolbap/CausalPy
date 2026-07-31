@@ -102,6 +102,12 @@ jobs:
           # pyproject.toml's `dev` + `test` extras via pyproject2conda.
           create-args: >-
             python=${{ matrix.python-version }} ${{ matrix.pandas-create-arg }}
+          cache-environment: true
+          # The cache key must name the pandas leg explicitly, otherwise the
+          # 2.3 and 3.x legs on the same Python would share one cached
+          # environment and silently test the same pandas twice.
+          cache-environment-key: >-
+            micromamba-py${{ matrix.python-version }}-pandas${{ matrix.pandas-version }}-${{ hashFiles('environment.yml') }}
       - name: Install package
         # --no-deps so pip does not pull pip-built pymc/pytensor on top of the
         # conda-forge ones. Runtime deps come from environment.yml.
@@ -110,6 +116,28 @@ jobs:
         run: |
           micromamba list
           python -c "import pymc, pytensor; print('pymc', pymc.__version__); print('blas_ldflags=', pytensor.config.blas__ldflags)"
+      - name: Check the resolved pandas matches the matrix leg
+        # Guards against a stale cache or a solver backtrack quietly giving this
+        # leg the wrong pandas, which would make the 2.3 leg meaningless.
+        env:
+          EXPECTED_PANDAS: ${{ matrix.pandas-version }}
+        run: |
+          python - <<'PY'
+          import os
+          import pandas as pd
+
+          expected = os.environ["EXPECTED_PANDAS"]
+          expected_major, _, expected_minor = expected.partition(".")
+          major, minor = pd.__version__.split(".")[:2]
+          print(f"resolved pandas {pd.__version__}, matrix leg {expected}")
+          assert major == expected_major, (
+              f"expected pandas {expected}, got {pd.__version__}"
+          )
+          if expected_minor != "x":
+              assert minor == expected_minor, (
+                  f"expected pandas {expected}, got {pd.__version__}"
+              )
+          PY
       - name: Run doctests
         run: pytest --doctest-modules --ignore=causalpy/tests/ causalpy/ --config-file=causalpy/tests/conftest.py --no-cov
       - name: Run extra tests
@@ -124,5 +152,5 @@ jobs:
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
           token: ${{ secrets.CODECOV_TOKEN }} # use token for more robust uploads
-          name: ${{ matrix.python-version }}
+          name: py${{ matrix.python-version }}-pandas${{ matrix.pandas-version }}
           fail_ci_if_error: false
