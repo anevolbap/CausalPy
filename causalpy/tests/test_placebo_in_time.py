@@ -439,6 +439,59 @@ def test_assurance_formula_large_expected_effect_dominates_baseline():
     assert ar.true_positive_rate > ar.false_positive_rate
 
 
+def _assurance_rates(check: PlaceboInTime) -> tuple[float, ...]:
+    """Run the assurance simulation on fixed inputs and return its rates."""
+    result = check._compute_assurance(
+        theta_new_samples=np.linspace(-5.0, 5.0, 500),
+        fold_sds=np.array([0.5, 1.0, 2.0]),
+        n_posterior_samples=200,
+    )
+    return (
+        result.true_positive_rate,
+        result.false_positive_rate,
+        result.true_negative_rate,
+        result.false_negative_rate,
+    )
+
+
+def _make_assurance_check(random_seed: int | None) -> PlaceboInTime:
+    """Build a check whose assurance stage is driven only by ``random_seed``."""
+    return PlaceboInTime(
+        n_folds=2,
+        expected_effect_prior=np.linspace(0.0, 4.0, 500),
+        rope_half_width=1.0,
+        random_seed=random_seed,
+    )
+
+
+def test_assurance_simulation_is_reproducible_under_master_seed():
+    """The assurance stage must not drift between runs sharing a seed."""
+    first = _make_assurance_check(2024)
+    second = _make_assurance_check(2024)
+
+    assert _assurance_rates(first) == _assurance_rates(second)
+    # Repeating on the same instance must also be stable: the stage RNG is
+    # derived from the master seed, never carried across calls.
+    assert _assurance_rates(first) == _assurance_rates(first)
+
+
+def test_assurance_simulation_differs_across_master_seeds():
+    """Different seeds must actually exercise different simulation draws."""
+    assert _assurance_rates(_make_assurance_check(2024)) != _assurance_rates(
+        _make_assurance_check(99)
+    )
+
+
+def test_assurance_stage_rng_is_independent_of_prior_draw_stage():
+    """Prior draws and simulation noise must not share a stream."""
+    check = _make_assurance_check(2024)
+
+    assert not np.array_equal(
+        check._rng_for_stage(0).normal(size=50),
+        check._rng_for_stage(1).normal(size=50),
+    )
+
+
 # ===========================================================================
 # Cumulative impact extraction (integration — needs PyMC)
 # ===========================================================================
