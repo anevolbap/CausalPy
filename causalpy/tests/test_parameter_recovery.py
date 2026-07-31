@@ -49,6 +49,26 @@ EXPECTED_DRAW_SHAPE = (
     PARAMETER_RECOVERY_DRAWS,
 )
 
+# Tolerance calibration policy. Every limit below is set from the statistics
+# actually produced by the seeded fits (seed 157, 4 chains, 500 draws/tune), with
+# roughly 2x-4x headroom, so the gates stay informative instead of unfalsifiable:
+#
+#   gate                                observed        limit
+#   DiD |z| (worst coefficient)         1.97            2.5
+#   DiD posterior SD (worst)            0.072           0.16
+#   DiD draw-wise R^2                   0.968           >= 0.90
+#   SC  |z| (worst estimand)            1.25            3.0
+#   SC  weight posterior SD (worst)     0.0089          0.025
+#   SC  average-impact posterior SD     0.00039         0.002
+#   SC  first/last impact posterior SD  0.012           0.05
+#   SC  cumulative posterior SD         0.012           0.05
+#   SC  counterfactual RMSE             0.011           0.03
+#   SC  counterfactual max abs error    0.015           0.05
+#   SC  draw-wise R^2                   0.835           >= 0.80
+#
+# The errors are dominated by the fixed simulated data realization, not by Monte
+# Carlo noise (MCSE is ~2% of each posterior SD here), so the headroom absorbs
+# sampler and platform differences without letting a genuine regression through.
 DID_UNITS_PER_GROUP = 50
 DID_TRUE_COEFFICIENTS = {
     "Intercept": 4.0,
@@ -69,11 +89,12 @@ SC_TRUE_AVERAGE_IMPACT = -1.25
 SC_TRUE_FINAL_CUMULATIVE_IMPACT = -38.75
 SC_MAX_STANDARDIZED_ERROR = 3.0
 SC_MAX_WEIGHT_POSTERIOR_SD = 0.025
-SC_MAX_IMPACT_POSTERIOR_SD = 0.20
-SC_MAX_CUMULATIVE_POSTERIOR_SD = 6.20
+SC_MAX_AVERAGE_IMPACT_POSTERIOR_SD = 0.002
+SC_MAX_IMPACT_POSTERIOR_SD = 0.05
+SC_MAX_CUMULATIVE_POSTERIOR_SD = 0.05
 SC_MIN_DRAW_WISE_R2 = 0.80
-SC_MAX_COUNTERFACTUAL_RMSE = 0.10
-SC_MAX_COUNTERFACTUAL_ABSOLUTE_ERROR = 0.20
+SC_MAX_COUNTERFACTUAL_RMSE = 0.03
+SC_MAX_COUNTERFACTUAL_ABSOLUTE_ERROR = 0.05
 
 
 def _load_harness_module() -> ModuleType:
@@ -685,7 +706,7 @@ def test_synthetic_control_parameter_recovery(
                 "summary"
             ],
             SC_TRUE_AVERAGE_IMPACT,
-            SC_MAX_IMPACT_POSTERIOR_SD,
+            SC_MAX_AVERAGE_IMPACT_POSTERIOR_SD,
         ),
         (
             "sc_final_cumulative_impact",
