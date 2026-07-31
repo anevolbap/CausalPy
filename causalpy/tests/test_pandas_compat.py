@@ -77,6 +77,23 @@ def test_patsy_normalization_leaves_non_string_extension_dtypes_unchanged():
     pd.testing.assert_frame_equal(data, original)
 
 
+def test_patsy_normalization_is_a_no_op_for_nan_backed_string_columns():
+    """Only ``pd.NA``-sentinel string columns need the Patsy #206 workaround.
+
+    Plain string literals give an object column on pandas 2.3 and the default
+    ``str`` dtype (``np.nan`` sentinel) on pandas 3. Neither trips Patsy, so
+    neither should pay for a copy.
+    """
+    data = pd.DataFrame({"unit": ["north", None, "south"], "y": [1.0, 2.0, 3.0]})
+
+    assert _normalize_patsy_data(data) is data
+
+    y, X = build_formula_matrices("y ~ 1 + C(unit)", data)
+
+    assert y.shape == (2, 1)
+    assert X.shape == (2, 2)
+
+
 def test_formula_matrices_preserve_extension_string_missingness():
     """Extension-string missing values retain Patsy's normal row-dropping behavior."""
     data = pd.DataFrame(

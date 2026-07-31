@@ -43,33 +43,61 @@ def _datetime_columns(data: pd.DataFrame) -> set[str]:
     }
 
 
-def _normalize_patsy_data(data: pd.DataFrame) -> pd.DataFrame:
-    """Convert only pandas extension-string columns to Patsy-compatible objects.
+def _uses_pd_na_string_dtype(dtype: Any) -> bool:
+    """Report whether ``dtype`` is a string dtype whose missing value is ``pd.NA``.
 
-    Pandas 3 infers its dedicated ``StringDtype`` for string columns. Patsy #206
-    historically could not interpret that dtype, particularly for Arrow-backed
-    strings. Convert extension strings on an owned frame while leaving categorical,
-    numeric, object, and datetime columns unchanged. Missing string values remain
-    missing as ``np.nan``, which Patsy's NA handling recognizes.
+    Parameters
+    ----------
+    dtype : Any
+        A pandas dtype, typically an entry of ``DataFrame.dtypes``.
+
+    Returns
+    -------
+    bool
+        ``True`` for nullable (``pd.NA``-sentinel) string dtypes, including
+        Arrow-backed strings.
+    """
+    if isinstance(dtype, pd.StringDtype):
+        # pandas 3's default inferred ``str`` dtype is also a StringDtype, but
+        # it uses ``np.nan`` as its missing value and needs no conversion.
+        return dtype.na_value is pd.NA
+    return isinstance(dtype, pd.ArrowDtype) and pd.api.types.is_string_dtype(dtype)
+
+
+def _normalize_patsy_data(data: pd.DataFrame) -> pd.DataFrame:
+    """Convert ``pd.NA``-backed string columns to Patsy-compatible object columns.
+
+    Patsy evaluates missingness with ``bool(value)``, which raises
+    ``TypeError: boolean value of NA is ambiguous`` for nullable string columns
+    (upstream Patsy #206). This affects both pandas 2.3 and pandas 3, and only
+    for the ``pd.NA`` sentinel: pandas 3's default inferred ``str`` dtype uses
+    ``np.nan`` and passes through untouched, as do categorical, numeric, object
+    and datetime columns.
+
+    Affected columns are rewritten to object dtype with ``np.nan`` for missing
+    values on a frame this function owns, so the caller's DataFrame is never
+    modified. Frames with no affected column are returned as-is, without a copy.
     """
     string_column_positions = [
         position
         for position, dtype in enumerate(data.dtypes)
-        if isinstance(dtype, pd.StringDtype)
-        or (isinstance(dtype, pd.ArrowDtype) and pd.api.types.is_string_dtype(dtype))
+        if _uses_pd_na_string_dtype(dtype)
     ]
     if not string_column_positions:
         return data
 
-    string_column_names = [
-        data.columns[position] for position in string_column_positions
-    ]
-    normalized_data = data.astype(dict.fromkeys(string_column_names, object))
+    # Positional access rather than by name: patsy is given whatever frame the
+    # caller built, which may carry duplicate column labels.
+    normalized_data = data.copy(deep=False)
     for position in string_column_positions:
-        column = normalized_data.iloc[:, position]
-        normalized_data.iloc[:, position] = column.where(
-            column.notna(), np.nan
-        ).to_numpy()
+        values = data.iloc[:, position].to_numpy(dtype=object, na_value=np.nan)
+        # An explicit object Series, not a bare ndarray: pandas 3 would
+        # otherwise re-infer its own string dtype from the object array.
+        # ``isetitem`` accepts a Series at runtime; pandas-stubs omits it.
+        normalized_data.isetitem(
+            position,
+            pd.Series(values, index=data.index, dtype=object),  # type: ignore[arg-type]
+        )
     return normalized_data
 
 
