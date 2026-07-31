@@ -30,7 +30,6 @@ import xarray as xr
 from pymc_extras.prior import Prior
 
 import causalpy as cp
-from causalpy.experiments.model_adapter import PyMCModelAdapter
 from causalpy.pymc_models import SoftmaxWeightedSumFitter, WeightedSumFitter
 
 sample_kwargs = {"tune": 20, "draws": 20, "chains": 2, "cores": 2, "progressbar": False}
@@ -394,7 +393,7 @@ def test_user_y_hat_prior_bypasses_invalid_scale_calculation(fitter_cls):
 
 @pytest.mark.parametrize("fitter_cls", FITTERS)
 def test_subclass_default_y_hat_prior_is_not_auto_overridden(fitter_cls):
-    """Only stock fitter defaults are eligible for automatic scaling."""
+    """A subclass that declares its own noise default has already chosen one."""
     df, tt, treated = _make_data([1.0])
     X, y = _pre_treatment_design(df, tt, treated)
     custom = Prior(
@@ -409,6 +408,19 @@ def test_subclass_default_y_hat_prior_is_not_auto_overridden(fitter_cls):
     )
     priors = custom_fitter().priors_from_data(X, y)
     assert "y_hat" not in priors
+
+
+@pytest.mark.parametrize("fitter_cls", FITTERS)
+def test_subclass_inheriting_the_stock_default_is_auto_scaled(fitter_cls):
+    """A subclass that leaves the noise default alone is still scaled."""
+    df, tt, treated = _make_data([1.0])
+    X, y = _pre_treatment_design(df, tt, treated)
+    subclass = type("SubclassedFitter", (fitter_cls,), {})
+    sigma = subclass().priors_from_data(X, y)["y_hat"].parameters["sigma"]
+    assert sigma.distribution == "Exponential"
+    np.testing.assert_allclose(
+        np.asarray(sigma.parameters["lam"]), _expected_lam(df, tt, treated)
+    )
 
 
 @pytest.mark.parametrize("fitter_cls", FITTERS)
@@ -441,37 +453,43 @@ def test_finite_scale_rate_boundaries_are_checked(
         assert np.all(rate > 0)
 
 
+@pytest.mark.integration
 @pytest.mark.filterwarnings("ignore::UserWarning")
 @pytest.mark.parametrize("fitter_cls", FITTERS)
-def test_opt_out_cleans_fit_local_policy_after_fit_error(monkeypatch, fitter_cls):
-    """A failed opt-out fit leaves no private policy on either model instance."""
+def test_opt_out_survives_refit_and_cloning(mock_pymc_sample, fitter_cls):
+    """The opt-out is carried by the model, so later fits keep the legacy prior."""
+    df, tt, treated = _make_data([1.0])
+    result = cp.SyntheticControl(
+        df,
+        tt,
+        control_units=["a", "b", "c"],
+        treated_units=treated,
+        model=_fitter(fitter_cls),
+        auto_scale_sigma=False,
+    )
+    X, y = _pre_treatment_design(*_make_data([100.0]))
+    refitted = result.model._clone()
+    refitted.fit(X, y)
+    sigma = refitted.priors["y_hat"].parameters["sigma"]
+    assert sigma.distribution == "HalfNormal"
+    assert sigma.parameters["sigma"] == 1
+
+
+@pytest.mark.integration
+@pytest.mark.filterwarnings("ignore::UserWarning")
+@pytest.mark.parametrize("fitter_cls", FITTERS)
+def test_opt_out_leaves_the_callers_model_untouched(mock_pymc_sample, fitter_cls):
+    """Opting out fits a copy, so the caller's own instance is not reconfigured."""
     df, tt, treated = _make_data([1.0])
     source_model = _fitter(fitter_cls)
-    clones = []
-    original_clone = fitter_cls._clone
-
-    def capture_clone(self):
-        clone = original_clone(self)
-        clones.append(clone)
-        return clone
-
-    def fail_fit(self, X, y, *, coords=None):
-        raise RuntimeError("fit failed")
-
-    monkeypatch.setattr(fitter_cls, "_clone", capture_clone)
-    monkeypatch.setattr(PyMCModelAdapter, "fit", fail_fit)
-    with pytest.raises(RuntimeError, match="fit failed"):
-        cp.SyntheticControl(
-            df,
-            tt,
-            control_units=["a", "b", "c"],
-            treated_units=treated,
-            model=source_model,
-            auto_scale_sigma=False,
-        )
-    assert len(clones) == 1
-    assert "_auto_scale_sigma" not in clones[0].__dict__
-    assert "_auto_scale_sigma" not in source_model.__dict__
-    assert source_model.priors["y_hat"].parameters["sigma"].distribution == (
-        "HalfNormal"
+    result = cp.SyntheticControl(
+        df,
+        tt,
+        control_units=["a", "b", "c"],
+        treated_units=treated,
+        model=source_model,
+        auto_scale_sigma=False,
     )
+    assert result.model is not source_model
+    assert source_model._user_priors is None
+    assert source_model.idata is None

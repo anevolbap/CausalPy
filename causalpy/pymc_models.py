@@ -657,6 +657,36 @@ class LinearRegression(PyMCModel):
             self.priors["y_hat"].create_likelihood_variable("y_hat", mu=mu, observed=y)
 
 
+#: The observation-noise prior both weighted-sum fitters carried before #887 made
+#: the scale data-derived. It stays their declared default (so a fit that never
+#: reaches ``priors_from_data`` is unchanged) and doubles as the opt-out prior.
+_LEGACY_Y_HAT_PRIOR = Prior(
+    "Normal",
+    sigma=Prior("HalfNormal", sigma=1, dims=["treated_units"]),
+    dims=["obs_ind", "treated_units"],
+)
+
+
+def _uses_stock_y_hat_default(model: "PyMCModel") -> bool:
+    """Report whether a model still declares the stock ``y_hat`` default prior.
+
+    Automatic scaling replaces a default the user never chose. A subclass that
+    declares its own ``y_hat`` default *has* chosen one, so it is left alone;
+    subclasses that only customise other parts of the model are still scaled.
+
+    Parameters
+    ----------
+    model : PyMCModel
+        Model whose declared default priors are inspected.
+
+    Returns
+    -------
+    bool
+        ``True`` when the ``y_hat`` default is ``_LEGACY_Y_HAT_PRIOR``.
+    """
+    return type(model).default_priors.get("y_hat") is _LEGACY_Y_HAT_PRIOR
+
+
 #: Fallback outcome scale used when a treated unit's pre-treatment spread cannot
 #: be estimated (a constant series, or fewer than two observations). Keeping the
 #: scale at 1 reproduces the legacy ``HalfNormal(1)`` order of magnitude for
@@ -763,25 +793,18 @@ class WeightedSumFitter(PyMCModel):
     >>> _ = wsf.fit(X, y, coords=coords)
     """  # noqa: W605
 
-    default_priors = {
-        "y_hat": Prior(
-            "Normal",
-            sigma=Prior("HalfNormal", sigma=1, dims=["treated_units"]),
-            dims=["obs_ind", "treated_units"],
-        ),
-    }
-
-    _auto_scale_sigma = True
+    default_priors = {"y_hat": _LEGACY_Y_HAT_PRIOR}
 
     def priors_from_data(self, X, y) -> dict[str, Any]:
         """Set data-dependent priors for weights and observation noise.
 
-        The Dirichlet weight prior is uniform across available control units. For
-        the stock fitter, the default ``y_hat`` prior uses an independent
-        ``Exponential(lam=2 / s_i)`` noise scale for each treated outcome, where
-        ``s_i`` is its sample standard deviation. A user-provided ``y_hat`` prior
-        takes precedence, and ``SyntheticControl(auto_scale_sigma=False)`` leaves
-        the legacy ``HalfNormal(1)`` prior in place.
+        The Dirichlet weight prior is uniform across available control units. The
+        default ``y_hat`` prior uses an independent ``Exponential(lam=2 / s_i)``
+        noise scale for each treated outcome, where ``s_i`` is its sample standard
+        deviation. A user-provided ``y_hat`` prior, or a ``y_hat`` default
+        declared by a subclass, takes precedence; so does
+        ``SyntheticControl(auto_scale_sigma=False)``, which leaves the legacy
+        ``HalfNormal(1)`` prior in place.
 
         Parameters
         ----------
@@ -800,11 +823,7 @@ class WeightedSumFitter(PyMCModel):
                 "Dirichlet", a=np.ones(X.shape[1]), dims=["treated_units", "coeffs"]
             ),
         }
-        if (
-            type(self) is WeightedSumFitter
-            and self._auto_scale_sigma
-            and "y_hat" not in (self._user_priors or {})
-        ):
+        if _uses_stock_y_hat_default(self) and "y_hat" not in (self._user_priors or {}):
             priors["y_hat"] = _data_scaled_y_hat_prior(y)
         return priors
 
@@ -955,25 +974,17 @@ class SoftmaxWeightedSumFitter(PyMCModel):
     >>> _ = wsf.fit(X, y, coords=coords)
     """  # noqa: W605
 
-    default_priors = {
-        "y_hat": Prior(
-            "Normal",
-            sigma=Prior("HalfNormal", sigma=1, dims=["treated_units"]),
-            dims=["obs_ind", "treated_units"],
-        ),
-    }
-
-    _auto_scale_sigma = True
+    default_priors = {"y_hat": _LEGACY_Y_HAT_PRIOR}
 
     def priors_from_data(self, X, y) -> dict[str, Any]:
         """Set data-dependent priors for logits and observation noise.
 
         The Normal prior on the ``N - 1`` unconstrained logits uses
-        ``sigma=1.0`` by default. For the stock fitter, the default ``y_hat``
-        prior uses an independent ``Exponential(lam=2 / s_i)`` noise scale for
-        each treated outcome, where ``s_i`` is its sample standard deviation. A
-        user-provided ``y_hat`` prior takes precedence, and
-        ``SyntheticControl(auto_scale_sigma=False)`` leaves the legacy
+        ``sigma=1.0`` by default. The default ``y_hat`` prior uses an independent
+        ``Exponential(lam=2 / s_i)`` noise scale for each treated outcome, where
+        ``s_i`` is its sample standard deviation. A user-provided ``y_hat`` prior,
+        or a ``y_hat`` default declared by a subclass, takes precedence; so does
+        ``SyntheticControl(auto_scale_sigma=False)``, which leaves the legacy
         ``HalfNormal(1)`` prior in place.
 
         Unlike :meth:`WeightedSumFitter.priors_from_data`, the Normal logit prior
@@ -1000,11 +1011,7 @@ class SoftmaxWeightedSumFitter(PyMCModel):
                 dims=["treated_units", "coeffs_raw"],
             ),
         }
-        if (
-            type(self) is SoftmaxWeightedSumFitter
-            and self._auto_scale_sigma
-            and "y_hat" not in (self._user_priors or {})
-        ):
+        if _uses_stock_y_hat_default(self) and "y_hat" not in (self._user_priors or {}):
             priors["y_hat"] = _data_scaled_y_hat_prior(y)
         return priors
 
