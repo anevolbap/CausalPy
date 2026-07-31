@@ -403,13 +403,15 @@ class PyMCModel(pm.Model):
         # sample_posterior_predictive() if provided in sample_kwargs.
         random_seed = self.sample_kwargs.get("random_seed", None)
 
-        # Rebuild effective priors for every fit so data-derived priors never
-        # leak into a later fit. User configuration always has final precedence.
+        # Rebuild the effective priors from scratch on every fit, so that a
+        # previous fit's data-derived priors cannot leak into this one. The
+        # configured state is restored first, which is also what the model is
+        # left in if priors_from_data rejects the data. Precedence is
+        # defaults -> data-derived -> user.
         self.priors = {**self.default_priors, **(self._user_priors or {})}
-        data_priors = self.priors_from_data(X, y)
         self.priors = {
             **self.default_priors,
-            **data_priors,
+            **self.priors_from_data(X, y),
             **(self._user_priors or {}),
         }
 
