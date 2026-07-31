@@ -26,11 +26,39 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pymc as pm
 import pytest
 import xarray as xr
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "migration_baseline" / "harness.py"
+
+# The shared ``conftest`` registers ``mock_pymc_sample`` at *session* scope, so
+# once any earlier test in the run triggers it, ``pymc.sample`` (and
+# ``pymc.Flat`` / ``pymc.HalfFlat``) stay monkeypatched to the fast
+# prior-predictive mock for the remainder of the session. That mock produces no
+# ``sample_stats`` group, which the baseline harness requires, so the capture
+# test below would fail purely because of suite ordering. Capture the genuine
+# callables at import time -- collection always completes before any fixture
+# runs -- so the capture test can restore real reduced MCMC regardless of which
+# tests ran before it.
+_GENUINE_PYMC_SAMPLING = {
+    name: getattr(pm, name) for name in ("sample", "Flat", "HalfFlat")
+}
+
+
+@pytest.fixture
+def genuine_pymc_sampling():
+    """Force real PyMC sampling for a test despite the session-scoped mock."""
+    saved = {name: getattr(pm, name) for name in _GENUINE_PYMC_SAMPLING}
+    for name, value in _GENUINE_PYMC_SAMPLING.items():
+        setattr(pm, name, value)
+    try:
+        yield
+    finally:
+        for name, value in saved.items():
+            setattr(pm, name, value)
+
 
 # Decoded artifact JSON: a heterogeneous, arbitrarily nested mapping that the harness itself types as ``dict[str, Any]`` and validates at runtime. These tests deliberately reach into and mutate that structure at arbitrary depths, including inserting keys the schema does not register, so a TypedDict would reject the very tampering being asserted.
 ArtifactPayload = dict[str, Any]
@@ -1069,7 +1097,9 @@ def _assert_case_matches_manifest(harness, case: dict[str, Any], expected) -> No
 
 @pytest.mark.slow
 @pytest.mark.integration
-def test_capture_reproduces_the_fixed_manifest_on_the_installed_stack() -> None:
+def test_capture_reproduces_the_fixed_manifest_on_the_installed_stack(
+    genuine_pymc_sampling,
+) -> None:
     """Both fixed scenarios must actually capture against the installed CausalPy.
 
     Every other test in this module drives the harness with synthesized
