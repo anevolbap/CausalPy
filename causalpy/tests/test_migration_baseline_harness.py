@@ -638,6 +638,8 @@ def test_report_records_artifact_provenance_and_observed_validity() -> None:
                         "absolute_mean_delta": 0.001,
                         "absolute_tolerance": 0.01,
                         "standardized_mean_drift": 0.001,
+                        "reference_hdi": [0.8, 1.2],
+                        "candidate_hdi": [0.81, 1.21],
                         "mutual_hdi_containment_diagnostic": True,
                         "passed": True,
                     }
@@ -648,6 +650,8 @@ def test_report_records_artifact_provenance_and_observed_validity() -> None:
 
     report = harness.render_report(comparison)
 
+    assert "| Reference 0.94 HDI | Candidate 0.94 HDI |" in report
+    assert "| [0.8, 1.2] | [0.81, 1.21] |" in report
     assert "## Comparator identity" in report
     assert "harness-commit" in report
     assert "harness-blob-sha256" in report

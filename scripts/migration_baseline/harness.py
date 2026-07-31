@@ -2335,6 +2335,12 @@ def _format_number(value: float | None) -> str:
     return "n/a" if value is None else f"{value:.8g}"
 
 
+def _format_interval(bounds: list[float]) -> str:
+    """Render one closed posterior interval for the Markdown comparison table."""
+    lower, upper = bounds
+    return f"[{_format_number(lower)}, {_format_number(upper)}]"
+
+
 def render_report(comparison: dict[str, Any]) -> str:
     """Render an issue-attachment-ready Markdown report from a comparison result."""
     status = "PASS" if comparison["passed"] else "FAIL"
@@ -2521,8 +2527,8 @@ def render_report(comparison: dict[str, Any]) -> str:
             "",
             "## Metric comparison",
             "",
-            "| Scenario | Metric | Reference mean | Candidate mean | Absolute delta | Tolerance | Standardized drift | Mutual HDI diagnostic | Hard gates |",
-            "|---|---|---:|---:|---:|---:|---:|---|---|",
+            f"| Scenario | Metric | Reference mean | Candidate mean | Reference {HDI_PROB:.2f} HDI | Candidate {HDI_PROB:.2f} HDI | Absolute delta | Tolerance | Standardized drift | Mutual HDI diagnostic | Hard gates |",
+            "|---|---|---:|---:|---|---|---:|---:|---:|---|---|",
         ]
     )
     for case in comparison["cases"]:
@@ -2533,6 +2539,8 @@ def render_report(comparison: dict[str, Any]) -> str:
                 f"{case['name']} | `{metric['id']}` | "
                 f"{_format_number(metric['reference_mean'])} | "
                 f"{_format_number(metric['candidate_mean'])} | "
+                f"{_format_interval(metric['reference_hdi'])} | "
+                f"{_format_interval(metric['candidate_hdi'])} | "
                 f"{_format_number(metric['absolute_mean_delta'])} | "
                 f"{_format_number(metric['absolute_tolerance'])} | "
                 f"{_format_number(metric['standardized_mean_drift'])} | "
