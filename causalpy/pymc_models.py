@@ -2303,7 +2303,8 @@ class StateSpaceTimeSeries(PyMCModel):
     sample_kwargs : dict, optional
         Kwargs passed to `pm.sample`.
     mode : str, optional
-        Pytensor compile mode passed to `build_statespace_graph`. Defaults to None.
+        Pytensor compile mode used when building the state-space model. Defaults
+        to None.
     priors : dict, optional
         Dictionary of priors for the model. Defaults to ``None``, in which
         case default priors are used.
@@ -2391,7 +2392,7 @@ class StateSpaceTimeSeries(PyMCModel):
                     "StateSpaceTimeSeries requires pymc-extras when default trend component is used. "
                     "Install it with `conda/mamba/micromamba install -c conda-forge pymc-extras`."
                 ) from err
-            self._trend_component = st.LevelTrendComponent(order=self.level_order)
+            self._trend_component = st.LevelTrend(order=self.level_order)
         return self._trend_component
 
     def _get_seasonality_component(self):
@@ -2482,7 +2483,9 @@ class StateSpaceTimeSeries(PyMCModel):
         trend = self._get_trend_component()
         season = self._get_seasonality_component()
         combined = trend + season
-        self.ss_mod = combined.build()
+        # `mode` belongs on the state-space model itself; passing it to
+        # `build_statespace_graph` is deprecated in pymc-extras.
+        self.ss_mod = combined.build(mode=self.mode)
 
         # Extract parameter dims (order: initial_trend, sigma_trend, seasonal, P0)
         if self.ss_mod is None:
@@ -2528,7 +2531,7 @@ class StateSpaceTimeSeries(PyMCModel):
             )
             df = pd.DataFrame({"y": y_values.flatten()}, index=datetime_index)
             if self.ss_mod is not None:
-                self.ss_mod.build_statespace_graph(df[["y"]], mode=self.mode)
+                self.ss_mod.build_statespace_graph(df[["y"]])
 
     def fit(
         self,
