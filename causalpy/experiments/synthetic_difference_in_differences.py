@@ -26,8 +26,11 @@ from sklearn.base import RegressorMixin
 
 from causalpy._arviz_compat import hdi_bounds
 from causalpy.constants import HDI_PROB
-from causalpy.custom_exceptions import BadIndexException
-from causalpy.date_utils import _combine_datetime_indices, format_date_axes
+from causalpy.date_utils import (
+    _combine_datetime_indices,
+    format_date_axes,
+    validate_treatment_time_against_index,
+)
 from causalpy.plot_utils import _PosteriorPlotStyle, plot_posterior_over_x
 from causalpy.pymc_models import PyMCModel, SyntheticDifferenceInDifferencesWeightFitter
 from causalpy.reporting import EffectSummary
@@ -132,7 +135,8 @@ class SyntheticDifferenceInDifferences(BaseExperiment):
         **kwargs: dict,
     ) -> None:
         super().__init__(model=model)
-        # rename the index to "obs_ind"
+        # Work on an owned frame before normalizing its index metadata.
+        data = data.copy()
         data.index.name = "obs_ind"
         self.data = data
         self.input_validation(data, treatment_time)
@@ -173,18 +177,7 @@ class SyntheticDifferenceInDifferences(BaseExperiment):
             The time when treatment occurred, should be in reference to the
             data index.
         """
-        if isinstance(data.index, pd.DatetimeIndex) and not isinstance(
-            treatment_time, pd.Timestamp
-        ):
-            raise BadIndexException(
-                "If data.index is DatetimeIndex, treatment_time must be pd.Timestamp."
-            )
-        if not isinstance(data.index, pd.DatetimeIndex) and isinstance(
-            treatment_time, pd.Timestamp
-        ):
-            raise BadIndexException(
-                "If data.index is not DatetimeIndex, treatment_time must be pd.Timestamp."  # noqa: E501
-            )
+        validate_treatment_time_against_index(data.index, treatment_time)
 
     def _prepare_data(self) -> None:
         """Bundle control and treated data into ``xr.Dataset`` objects per period.
@@ -592,7 +585,6 @@ class SyntheticDifferenceInDifferences(BaseExperiment):
         *,
         round_to: int | None = None,
         ci_prob: float = HDI_PROB,
-        hdi_prob: float | None = None,
         kind: Literal["ribbon", "histogram", "spaghetti"] = "ribbon",
         ci_kind: Literal["hdi", "eti"] = "hdi",
         num_samples: int = 50,
@@ -611,8 +603,6 @@ class SyntheticDifferenceInDifferences(BaseExperiment):
             posterior predictive, causal impact, and cumulative impact bands.
             Must be in ``(0, 1]``. Defaults to
             :data:`~causalpy.constants.HDI_PROB` (currently 0.94).
-        hdi_prob : float, optional
-            Deprecated. Use ``ci_prob`` instead.
         kind : {"ribbon", "histogram", "spaghetti"}, optional
             How posterior uncertainty is rendered via
             :func:`~causalpy.plot_utils.plot_posterior_over_x`. Defaults to ``"ribbon"``.
@@ -643,14 +633,6 @@ class SyntheticDifferenceInDifferences(BaseExperiment):
         ax : numpy.ndarray
             Array of the three :class:`matplotlib.axes.Axes` instances.
         """
-        if hdi_prob is not None:
-            warnings.warn(
-                "hdi_prob is deprecated and will be removed in a future release. "
-                "Use ci_prob instead.",
-                FutureWarning,
-                stacklevel=2,
-            )
-            ci_prob = hdi_prob
         return self._render_plot(
             show=show,
             legend_kwargs=legend_kwargs,

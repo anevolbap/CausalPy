@@ -240,6 +240,10 @@ class StaggeredDifferenceInDifferences(BaseExperiment):
         for col in required_cols:
             if col not in self.data.columns:
                 raise DataException(f"Required column '{col}' not found in data")
+            if self.data[col].isna().any():
+                raise DataException(
+                    f"Required column '{col}' must not contain missing values"
+                )
 
         # Check treated variable exists (either directly or via treatment_time)
         if self.treatment_time_variable_name is not None:
@@ -248,10 +252,20 @@ class StaggeredDifferenceInDifferences(BaseExperiment):
                     f"Treatment time column '{self.treatment_time_variable_name}' "
                     "not found in data"
                 )
+            if self.data[self.treatment_time_variable_name].isna().any():
+                raise DataException(
+                    f"Treatment time column '{self.treatment_time_variable_name}' "
+                    "must not contain missing values"
+                )
         elif self.treated_variable_name not in self.data.columns:
             raise DataException(
                 f"Treated column '{self.treated_variable_name}' not found in data. "
                 "Either provide treated_variable_name or treatment_time_variable_name."
+            )
+        elif self.data[self.treated_variable_name].isna().any():
+            raise DataException(
+                f"Treated column '{self.treated_variable_name}' "
+                "must not contain missing values"
             )
 
         # Validate absorbing treatment (once treated, always treated)
@@ -290,7 +304,7 @@ class StaggeredDifferenceInDifferences(BaseExperiment):
             # Use provided treatment time column
             # Get unique treatment time per unit
             g_map = (
-                self.data.groupby(self.unit_variable_name)[
+                self.data.groupby(self.unit_variable_name, observed=True)[
                     self.treatment_time_variable_name
                 ]
                 .first()
@@ -318,9 +332,12 @@ class StaggeredDifferenceInDifferences(BaseExperiment):
 
     def _compute_event_times(self) -> None:
         """Compute event time (t - G) for each observation."""
-        self.data["event_time"] = self.data[self.time_variable_name] - self.data["G"]
-        # Set event_time to NaN for never-treated units
-        self.data.loc[self.data["G"] == self.never_treated_value, "event_time"] = np.nan
+        # Construct a floating result before adding missing never-treated values:
+        # pandas 3 disallows dtype-changing in-place assignment.
+        event_time = (self.data[self.time_variable_name] - self.data["G"]).astype(float)
+        self.data["event_time"] = event_time.where(
+            self.data["G"] != self.never_treated_value, np.nan
+        )
 
     def _identify_untreated_observations(self) -> None:
         """Identify untreated observations for the training set."""
@@ -569,7 +586,9 @@ class StaggeredDifferenceInDifferences(BaseExperiment):
         event_time_treated = np.asarray(treated_data["event_time"].values)
 
         # --- Group-time ATTs (post-treatment only) ---
-        gt_groups = treated_data.groupby(["G", self.time_variable_name]).groups
+        gt_groups = treated_data.groupby(
+            ["G", self.time_variable_name], observed=True
+        ).groups
         att_gt_rows: list[dict] = []
         for key, idx in gt_groups.items():
             g_val = key[0]  # type: ignore[index]
@@ -671,7 +690,9 @@ class StaggeredDifferenceInDifferences(BaseExperiment):
         """
         # --- Group-time ATTs (post-treatment only) ---
         att_gt = (
-            treated_data.groupby(["G", self.time_variable_name])["tau_hat"]
+            treated_data.groupby(["G", self.time_variable_name], observed=True)[
+                "tau_hat"
+            ]
             .agg(["mean", "std", "count"])
             .reset_index()
         )
@@ -698,7 +719,7 @@ class StaggeredDifferenceInDifferences(BaseExperiment):
             ]
 
         att_et = (
-            event_data.groupby("event_time")["tau_hat"]
+            event_data.groupby("event_time", observed=True)["tau_hat"]
             .agg(["mean", "std", "count"])
             .reset_index()
         )
@@ -1058,7 +1079,7 @@ class StaggeredDifferenceInDifferences(BaseExperiment):
         att_gt, x_col, x_label, y_label = self._get_group_time_plot_data(
             x_axis=x_axis, include_placebo=include_placebo
         )
-        cohort_groups = list(att_gt.groupby("cohort", sort=True))
+        cohort_groups = list(att_gt.groupby("cohort", observed=True, sort=True))
         sharex = x_axis == "event_time"
         fig, axes = self._make_group_time_axes(
             att_gt=att_gt,
@@ -1173,7 +1194,9 @@ class StaggeredDifferenceInDifferences(BaseExperiment):
         tau_draws_all = y_observed - mu_draws.values
 
         att_gt_rows: list[dict[str, Any]] = []
-        gt_groups = pretreatment_data.groupby(["G", self.time_variable_name]).groups
+        gt_groups = pretreatment_data.groupby(
+            ["G", self.time_variable_name], observed=True
+        ).groups
         for key, idx in gt_groups.items():
             g_val = key[0]  # type: ignore[index]
             t_val = key[1]  # type: ignore[index]
@@ -1203,7 +1226,9 @@ class StaggeredDifferenceInDifferences(BaseExperiment):
             - pretreatment_data["y_hat0"].to_numpy()
         )
         att_gt = (
-            pretreatment_data.groupby(["G", self.time_variable_name])["tau_hat"]
+            pretreatment_data.groupby(["G", self.time_variable_name], observed=True)[
+                "tau_hat"
+            ]
             .agg(["mean", "std", "count"])
             .reset_index()
         )

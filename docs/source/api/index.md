@@ -1,5 +1,14 @@
 # API
 
+## Top-level API
+
+```{eval-rst}
+.. automodule:: causalpy
+   :members:
+   :undoc-members:
+   :imported-members:
+```
+
 ## Modules
 
 ```{eval-rst}
@@ -15,6 +24,7 @@
   pymc_forecast_models
   experiments
   pipeline
+  reporting
   steps
   checks
 ```
