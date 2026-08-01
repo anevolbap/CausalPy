@@ -150,11 +150,11 @@ repos:
         files: ^causalpy/.*\.py$
         exclude: ^causalpy/tests/
       - id: check-public-exports
-        name: Check public API export wiring
+        name: Check public API export and documentation wiring
         entry: python scripts/check_public_exports.py --check
         language: python
         pass_filenames: false
-        files: ^(causalpy/__init__\.py|causalpy/experiments/.*|causalpy/checks/.*)$
+        files: ^(causalpy/__init__\.py|causalpy/experiments/.*|causalpy/checks/.*|causalpy/tests/test_check_public_exports\.py|docs/source/api/index\.md|scripts/check_public_exports\.py|scripts/_ast_introspection\.py)$
       - id: check-architecture-inventory
         name: Check ARCHITECTURE.md experiment inventory
         entry: python scripts/check_architecture_inventory.py --check

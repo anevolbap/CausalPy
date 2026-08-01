@@ -13,22 +13,24 @@
 #   limitations under the License.
 """Interrupted Time Series Analysis."""
 
-import warnings
 from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
 import xarray as xr
 from matplotlib import pyplot as plt
-from patsy import build_design_matrices
 from sklearn.base import RegressorMixin
 
 from causalpy._arviz_compat import hdi_bounds
 from causalpy.constants import HDI_PROB, LEGEND_FONT_SIZE
 from causalpy.custom_exceptions import BadIndexException
-from causalpy.date_utils import _combine_datetime_indices, format_date_axes
+from causalpy.date_utils import (
+    _combine_datetime_indices,
+    format_date_axes,
+    validate_treatment_time_against_index,
+)
 from causalpy.experiments.model_adapter import build_coords
-from causalpy.formula_utils import build_formula_matrices
+from causalpy.formula_utils import build_design_matrices, build_formula_matrices
 from causalpy.plot_utils import (
     _PosteriorPlotStyle,
     format_r2_score,
@@ -162,6 +164,8 @@ class InterruptedTimeSeries(BaseExperiment):
         super().__init__(model=model)
         self.pre_design: xr.Dataset
         self.post_design: xr.Dataset
+        # Work on an owned frame before normalizing its index metadata.
+        data = data.copy()
         data.index.name = "obs_ind"
         self.data = data
         self.input_validation(data, treatment_time, treatment_end_time)
@@ -262,32 +266,11 @@ class InterruptedTimeSeries(BaseExperiment):
                 "data.index must be unique and monotonically increasing. "
                 "Sort the data and remove duplicate index values before fitting."
             )
-        if isinstance(data.index, pd.DatetimeIndex) and not isinstance(
-            treatment_time, pd.Timestamp
-        ):
-            raise BadIndexException(
-                "If data.index is DatetimeIndex, treatment_time must be pd.Timestamp."
-            )
-        if not isinstance(data.index, pd.DatetimeIndex) and isinstance(
-            treatment_time, pd.Timestamp
-        ):
-            raise BadIndexException(
-                "If data.index is not DatetimeIndex, treatment_time must be pd.Timestamp."  # noqa: E501
-            )
+        validate_treatment_time_against_index(data.index, treatment_time)
         if treatment_end_time is not None:
-            # Validate treatment_end_time matches index type
-            if isinstance(data.index, pd.DatetimeIndex) and not isinstance(
-                treatment_end_time, pd.Timestamp
-            ):
-                raise BadIndexException(
-                    "If data.index is DatetimeIndex, treatment_end_time must be pd.Timestamp."
-                )
-            if not isinstance(data.index, pd.DatetimeIndex) and isinstance(
-                treatment_end_time, pd.Timestamp
-            ):
-                raise BadIndexException(
-                    "If data.index is not DatetimeIndex, treatment_end_time must not be pd.Timestamp."
-                )
+            validate_treatment_time_against_index(
+                data.index, treatment_end_time, name="treatment_end_time"
+            )
             # Validate treatment_end_time > treatment_time
             # Type check: we've already validated both match the index type, so they're compatible
             # NOTE: Both treatment_time and treatment_end_time are INCLUSIVE (>=) in their respective periods
@@ -534,7 +517,6 @@ class InterruptedTimeSeries(BaseExperiment):
         *,
         round_to: int | None = 2,
         ci_prob: float = HDI_PROB,
-        hdi_prob: float | None = None,
         kind: Literal["ribbon", "histogram", "spaghetti"] = "ribbon",
         ci_kind: Literal["hdi", "eti"] = "hdi",
         num_samples: int = 50,
@@ -555,8 +537,6 @@ class InterruptedTimeSeries(BaseExperiment):
             posterior predictive, causal impact, and cumulative impact bands.
             Must be in ``(0, 1]``. Ignored for OLS models. Defaults to
             :data:`~causalpy.constants.HDI_PROB` (currently 0.94).
-        hdi_prob : float, optional
-            Deprecated. Use ``ci_prob`` instead.
         kind : {"ribbon", "histogram", "spaghetti"}, optional
             How posterior uncertainty is rendered via
             :func:`~causalpy.plot_utils.plot_posterior_over_x`. Defaults to ``"ribbon"``.
@@ -592,14 +572,6 @@ class InterruptedTimeSeries(BaseExperiment):
             The three axes (top: predictions, middle: causal impact,
             bottom: cumulative impact).
         """
-        if hdi_prob is not None:
-            warnings.warn(
-                "hdi_prob is deprecated and will be removed in a future release. "
-                "Use ci_prob instead.",
-                FutureWarning,
-                stacklevel=2,
-            )
-            ci_prob = hdi_prob
         return self._render_plot(
             show=show,
             legend_kwargs=legend_kwargs,

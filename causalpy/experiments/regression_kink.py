@@ -22,9 +22,9 @@ from matplotlib import pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
-from patsy import ModelDesc, build_design_matrices
+from patsy import ModelDesc
 import xarray as xr
-from causalpy.formula_utils import build_formula_matrices
+from causalpy.formula_utils import build_design_matrices, build_formula_matrices
 from causalpy.experiments.model_adapter import build_coords
 from causalpy.plot_utils import (
     _PosteriorPlotStyle,
@@ -270,7 +270,6 @@ class RegressionKink(BaseExperiment):
         *,
         round_to: int | None = 2,
         ci_prob: float = HDI_PROB,
-        hdi_prob: float | None = None,
         kind: Literal["ribbon", "histogram", "spaghetti"] = "ribbon",
         ci_kind: Literal["hdi", "eti"] = "hdi",
         num_samples: int = 50,
@@ -292,8 +291,6 @@ class RegressionKink(BaseExperiment):
             reported in the figure title for the change in gradient at the
             kink point. Must be in ``(0, 1]``. Defaults to
             :data:`~causalpy.constants.HDI_PROB` (currently 0.94).
-        hdi_prob : float, optional
-            Deprecated. Use ``ci_prob`` instead.
         kind : {"ribbon", "histogram", "spaghetti"}, optional
             How posterior uncertainty is rendered via
             :func:`~causalpy.plot_utils.plot_posterior_over_x`. Defaults to ``"ribbon"``.
@@ -327,14 +324,6 @@ class RegressionKink(BaseExperiment):
         ax : matplotlib.axes.Axes
             The axes object containing the plot.
         """
-        if hdi_prob is not None:
-            warnings.warn(
-                "hdi_prob is deprecated and will be removed in a future release. "
-                "Use ci_prob instead.",
-                FutureWarning,
-                stacklevel=2,
-            )
-            ci_prob = hdi_prob
         return self._render_plot(
             show=show,
             legend_kwargs=legend_kwargs,
