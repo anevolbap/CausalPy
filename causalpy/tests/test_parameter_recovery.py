@@ -210,19 +210,20 @@ def _summarize_focal_draws(draws: Any, label: str) -> dict[str, float]:
         raise AssertionError(f"{label} has non-positive posterior SD")
     if summary["hdi_lower"] > summary["hdi_upper"]:
         raise AssertionError(f"{label} has inverted {harness.HDI_PROB:.2f} HDI bounds")
-    if summary["rhat"] > harness.MAX_RHAT:
+    sampling = harness.REGISTERED_SAMPLING
+    if summary["rhat"] > sampling.max_rhat:
         raise AssertionError(
-            f"{label} has R-hat {summary['rhat']:.6g}, above {harness.MAX_RHAT:.6g}"
+            f"{label} has R-hat {summary['rhat']:.6g}, above {sampling.max_rhat:.6g}"
         )
-    if summary["ess_bulk"] < harness.MIN_ESS_BULK:
+    if summary["ess_bulk"] < sampling.min_ess_bulk:
         raise AssertionError(
             f"{label} has bulk ESS {summary['ess_bulk']:.6g}, below "
-            f"{harness.MIN_ESS_BULK:.6g}"
+            f"{sampling.min_ess_bulk:.6g}"
         )
-    if summary["ess_tail"] < harness.MIN_ESS_TAIL:
+    if summary["ess_tail"] < sampling.min_ess_tail:
         raise AssertionError(
             f"{label} has tail ESS {summary['ess_tail']:.6g}, below "
-            f"{harness.MIN_ESS_TAIL:.6g}"
+            f"{sampling.min_ess_tail:.6g}"
         )
     return summary
 
@@ -378,7 +379,7 @@ def sc_parameter_recovery_data() -> tuple[pd.DataFrame, dict[str, np.ndarray]]:
 @pytest.fixture(scope="module")
 def parameter_recovery_sample_kwargs() -> dict[str, Any]:
     """Use #1048's sampler compatibility policy at the smaller test budget."""
-    sample_kwargs, _ = harness._sample_kwargs(pm)
+    sample_kwargs = harness._sample_kwargs(pm, harness.REGISTERED_SAMPLING)
     sample_kwargs.update(
         {
             "chains": PARAMETER_RECOVERY_CHAINS,
@@ -388,7 +389,7 @@ def parameter_recovery_sample_kwargs() -> dict[str, Any]:
         }
     )
     assert sample_kwargs["cores"] == 1
-    assert sample_kwargs["target_accept"] == harness.TARGET_ACCEPT
+    assert sample_kwargs["target_accept"] == harness.REGISTERED_SAMPLING.target_accept
     return sample_kwargs
 
 
@@ -592,7 +593,7 @@ def test_did_parameter_recovery(
     result = did_parameter_recovery_result
     idata = result.idata
     assert idata is not None
-    sampling_quality = harness._sampling_quality(idata, np)
+    sampling_quality = harness._sampling_quality(idata, np, harness.REGISTERED_SAMPLING)
     for name, value in sampling_quality.items():
         record_property(f"did_sampling_{name}", str(value))
 
@@ -666,7 +667,7 @@ def test_synthetic_control_parameter_recovery(
     result = sc_parameter_recovery_result
     idata = result.idata
     assert idata is not None
-    sampling_quality = harness._sampling_quality(idata, np)
+    sampling_quality = harness._sampling_quality(idata, np, harness.REGISTERED_SAMPLING)
     for name, value in sampling_quality.items():
         record_property(f"sc_sampling_{name}", str(value))
 
