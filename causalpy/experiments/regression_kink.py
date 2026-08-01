@@ -22,9 +22,9 @@ from matplotlib import pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
-from patsy import ModelDesc, build_design_matrices
+from patsy import ModelDesc
 import xarray as xr
-from causalpy.formula_utils import build_formula_matrices
+from causalpy.formula_utils import build_design_matrices, build_formula_matrices
 from causalpy.experiments.model_adapter import build_coords
 from causalpy.plot_utils import (
     _PosteriorPlotStyle,

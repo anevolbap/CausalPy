@@ -26,8 +26,11 @@ from sklearn.base import RegressorMixin
 
 from causalpy._arviz_compat import hdi_bounds
 from causalpy.constants import HDI_PROB
-from causalpy.custom_exceptions import BadIndexException
-from causalpy.date_utils import _combine_datetime_indices, format_date_axes
+from causalpy.date_utils import (
+    _combine_datetime_indices,
+    format_date_axes,
+    validate_treatment_time_against_index,
+)
 from causalpy.plot_utils import _PosteriorPlotStyle, plot_posterior_over_x
 from causalpy.pymc_models import PyMCModel, SyntheticDifferenceInDifferencesWeightFitter
 from causalpy.reporting import EffectSummary
@@ -129,7 +132,8 @@ class SyntheticDifferenceInDifferences(BaseExperiment):
         model: PyMCModel | RegressorMixin | None = None,
     ) -> None:
         super().__init__(model=model)
-        # rename the index to "obs_ind"
+        # Work on an owned frame before normalizing its index metadata.
+        data = data.copy()
         data.index.name = "obs_ind"
         self.data = data
         self.input_validation(data, treatment_time)
@@ -170,18 +174,7 @@ class SyntheticDifferenceInDifferences(BaseExperiment):
             The time when treatment occurred, should be in reference to the
             data index.
         """
-        if isinstance(data.index, pd.DatetimeIndex) and not isinstance(
-            treatment_time, pd.Timestamp
-        ):
-            raise BadIndexException(
-                "If data.index is DatetimeIndex, treatment_time must be pd.Timestamp."
-            )
-        if not isinstance(data.index, pd.DatetimeIndex) and isinstance(
-            treatment_time, pd.Timestamp
-        ):
-            raise BadIndexException(
-                "If data.index is not DatetimeIndex, treatment_time must be pd.Timestamp."  # noqa: E501
-            )
+        validate_treatment_time_against_index(data.index, treatment_time)
 
     def _prepare_data(self) -> None:
         """Bundle control and treated data into ``xr.Dataset`` objects per period.
