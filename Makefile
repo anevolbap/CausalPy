@@ -31,7 +31,7 @@ check_lint: ## Check code formatting and linting without making changes
 	ruff check .
 	ruff format --diff --check .
 
-check-exports: ## Verify experiment/check public API export wiring
+check-exports: ## Verify public API export and documentation wiring
 	python scripts/check_public_exports.py --check
 
 check-architecture: ## Verify ARCHITECTURE.md experiment inventory matches code

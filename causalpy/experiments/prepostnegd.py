@@ -13,7 +13,6 @@
 #   limitations under the License.
 """Pretest/posttest nonequivalent group design."""
 
-import warnings
 from typing import Any, Literal
 
 import numpy as np
@@ -21,14 +20,13 @@ import pandas as pd
 import seaborn as sns
 import xarray as xr
 from matplotlib import pyplot as plt
-from patsy import build_design_matrices
 
 from causalpy.constants import HDI_PROB, LEGEND_FONT_SIZE
 from causalpy.custom_exceptions import (
     DataException,
 )
 from causalpy.experiments.model_adapter import build_coords
-from causalpy.formula_utils import build_formula_matrices
+from causalpy.formula_utils import build_design_matrices, build_formula_matrices
 from causalpy.plot_utils import (
     _PosteriorPlotStyle,
     plot_posterior_over_x,
@@ -254,7 +252,6 @@ class PrePostNEGD(BaseExperiment):
         *,
         round_to: int | None = None,
         ci_prob: float = HDI_PROB,
-        hdi_prob: float | None = None,
         kind: Literal["ribbon", "histogram", "spaghetti"] = "ribbon",
         ci_kind: Literal["hdi", "eti"] = "hdi",
         num_samples: int = 50,
@@ -276,8 +273,6 @@ class PrePostNEGD(BaseExperiment):
             and around the posterior of the estimated treatment effect.
             Must be in ``(0, 1]``. Defaults to
             :data:`~causalpy.constants.HDI_PROB` (currently 0.94).
-        hdi_prob : float, optional
-            Deprecated. Use ``ci_prob`` instead.
         kind : {"ribbon", "histogram", "spaghetti"}, optional
             How posterior uncertainty is rendered via
             :func:`~causalpy.plot_utils.plot_posterior_over_x`. Defaults to ``"ribbon"``.
@@ -311,14 +306,6 @@ class PrePostNEGD(BaseExperiment):
             The two axes (top: scatter and posterior predictive bands,
             bottom: estimated treatment effect posterior).
         """
-        if hdi_prob is not None:
-            warnings.warn(
-                "hdi_prob is deprecated and will be removed in a future release. "
-                "Use ci_prob instead.",
-                FutureWarning,
-                stacklevel=2,
-            )
-            ci_prob = hdi_prob
         return self._render_plot(
             show=show,
             legend_kwargs=legend_kwargs,

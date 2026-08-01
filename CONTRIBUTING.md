@@ -181,6 +181,10 @@ For more instructions see the [Pull request checklist](#pull-request-checklist)
 
 1. Finally, to submit a pull request, go to the GitHub web page of your fork of the CausalPy repo. Click the 'Pull request' button to send your changes to the project's maintainers for review. This will send an email to the committers.
 
+## Public API compatibility
+
+The authoritative [four-tier API policy](ARCHITECTURE.md#public-api-policy) defines which paths are stable and their SemVer expectations. Before adding, promoting, or changing an API, identify its tier in the PR and update the applicable Sphinx or manifest surface. Do not infer public support from an import path, a whole-submodule re-export, or an unprefixed name; leave an ambiguous helper in Tier 3 until maintainers explicitly promote it. Tier 1 and Tier 2 changes need documentation and a compatibility or migration plan for breaking changes; add an observable contract test or deterministic checker only when the rule does not require heuristic judgment. Tier 4 protocol changes need integrator-facing migration guidance.
+
 ## Pull request checklist
 
 We recommend that your contribution complies with the following guidelines before you submit a pull request:

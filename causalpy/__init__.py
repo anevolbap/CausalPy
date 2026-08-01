@@ -38,6 +38,7 @@ from .experiments.synthetic_difference_in_differences import (
     SyntheticDifferenceInDifferences,
 )
 from .pipeline import Pipeline, PipelineContext, PipelineResult, Step
+from .reporting import EffectSummary
 from .steps import (
     EstimateEffect,
     GenerateReport,
@@ -52,6 +53,7 @@ __all__ = [
     "create_causalpy_compatible_class",
     "DifferenceInDifferences",
     "EstimateEffect",
+    "EffectSummary",
     "extract_lift_for_mmm",
     "GenerateReport",
     "InstrumentalVariable",
