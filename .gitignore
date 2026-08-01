@@ -31,5 +31,5 @@ docs/source/_static/thumbnails/
 .scratch/
 coverage.xml
 
-# PyTensor compile cache (may appear in the working tree during local runs)
+# PyTensor compilation cache (may appear in the working tree during local runs)
 .pytensor/
