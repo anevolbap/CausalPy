@@ -187,12 +187,7 @@ extend-select = [
 ignore-words = "./docs/source/.codespell/codespell-whitelist.txt"
 skip = "*.ipynb,*.csv,*.svg,pyproject.toml,docs/source/.codespell/codespell-whitelist.txt"
 
-# Numpydoc validation. Originally introduced under #886 as a narrow check on
-# public ``.plot`` overrides, expanded under #898 to enforce a curated set of
-# numpydoc rules across the whole ``causalpy`` package. The ``exclude`` regex
-# matches any dotted node whose path contains a private (underscore-prefixed)
-# component — private helpers, dunders, and members of private modules are
-# considered implementation detail and not subject to docstring validation.
+# Numpydoc validation. Originally introduced under #886 as a narrow check on public ``.plot`` overrides, expanded under #898 to enforce a curated set of numpydoc rules across the whole ``causalpy`` package. The ``exclude`` regex matches any dotted node whose path contains a private (underscore-prefixed) component — private helpers, dunders, and members of private modules are considered implementation detail and not subject to docstring validation.
 [tool.numpydoc_validation]
 checks = [
     "PR01",  # Parameters not documented

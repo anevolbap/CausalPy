@@ -14,7 +14,7 @@
 """Inverse propensity weighting."""
 
 import warnings
-from typing import Any, Literal
+from typing import Any, NoReturn
 
 import arviz as az
 import matplotlib.pyplot as plt
@@ -28,7 +28,6 @@ from sklearn.linear_model import LinearRegression as sk_lin_reg
 from causalpy.custom_exceptions import DataException
 from causalpy.formula_utils import build_formula_matrices
 from causalpy.pymc_models import PropensityScore
-from causalpy.reporting import EffectSummary
 
 from .base import BaseExperiment
 
@@ -51,8 +50,6 @@ class InversePropensityWeighting(BaseExperiment):
         of these weighting schemes.
     model : PropensityScore, optional
         A PyMC model. Defaults to PropensityScore.
-    **kwargs
-        Additional keyword arguments forwarded to :class:`BaseExperiment`.
 
     Notes
     -----
@@ -92,7 +89,6 @@ class InversePropensityWeighting(BaseExperiment):
         outcome_variable: str,
         weighting_scheme: str,
         model: PropensityScore | None = None,
-        **kwargs: dict,
     ) -> None:
         super().__init__(model=model)
         self.expt_type = "Inverse Propensity Score Weighting"
@@ -882,61 +878,16 @@ class InversePropensityWeighting(BaseExperiment):
         axs[0].legend()
         return fig, list(axs)
 
-    def effect_summary(
-        self,
-        *,
-        window: Literal["post"] | tuple | slice = "post",
-        direction: Literal["increase", "decrease", "two-sided"] = "increase",
-        alpha: float = 0.05,
-        cumulative: bool = True,
-        relative: bool = True,
-        min_effect: float | None = None,
-        treated_unit: str | None = None,
-        period: Literal["intervention", "post", "comparison"] | None = None,
-        prefix: str = "Post-period",
-        **kwargs: Any,
-    ) -> EffectSummary:
-        """Generate a decision-ready summary of causal effects.
-
-        .. note::
-
-            This method is not yet implemented for
-            ``InversePropensityWeighting`` experiments.  Calling it will raise
-            ``NotImplementedError``.
-
-        Parameters
-        ----------
-        window : Literal["post"] | tuple | slice, optional
-            Time window for analysis.  Defaults to ``"post"``.
-        direction : ``"increase"`` | ``"decrease"`` | ``"two-sided"``, optional
-            Direction for tail probability calculation.  Defaults to
-            ``"increase"``.
-        alpha : float, optional
-            Significance level for HDI/CI intervals.  Defaults to 0.05.
-        cumulative : bool, optional
-            Whether to include cumulative effect statistics.  Defaults to
-            ``True``.
-        relative : bool, optional
-            Whether to include relative effect statistics.  Defaults to
-            ``True``.
-        min_effect : float | None, optional
-            ROPE threshold for practical equivalence.  Defaults to ``None``.
-        treated_unit : str | None, optional
-            For multi-unit experiments, the unit to analyse.  Defaults to
-            ``None``.
-        period : ``"intervention"`` | ``"post"`` | ``"comparison"`` | None, optional
-            Period to summarise for multi-period experiments.  Defaults to
-            ``None``.
-        prefix : str, optional
-            Label prefix for prose generation.  Defaults to ``"Post-period"``.
-        **kwargs : Any
-            Additional keyword arguments (currently unused).
+    def effect_summary(self) -> NoReturn:
+        """Raise because unified effect summaries are unavailable.
 
         Raises
         ------
         NotImplementedError
-            Always raised; this method is a placeholder for future work.
+            Inverse-propensity-weighting experiments do not implement a unified
+            decision-ready effect summary.
         """
         raise NotImplementedError(
-            "effect_summary is not yet implemented for InversePropensityWeighting experiments."
+            "effect_summary is not yet implemented for "
+            "InversePropensityWeighting experiments."
         )
