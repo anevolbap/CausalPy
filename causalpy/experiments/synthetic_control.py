@@ -28,7 +28,7 @@ from causalpy.date_utils import (
     format_date_axes,
     validate_treatment_time_against_index,
 )
-from causalpy.experiments.model_adapter import build_coords
+from causalpy.experiments.model_adapter import PyMCModelAdapter, build_coords
 from causalpy.plot_utils import (
     _PosteriorPlotStyle,
     format_r2_score,
@@ -36,7 +36,12 @@ from causalpy.plot_utils import (
     has_posterior_draws,
     plot_posterior_over_x,
 )
-from causalpy.pymc_models import PyMCModel, WeightedSumFitter
+from causalpy.pymc_models import (
+    _LEGACY_Y_HAT_PRIOR,
+    PyMCModel,
+    WeightedSumFitter,
+    _uses_stock_y_hat_default,
+)
 from causalpy.reporting import EffectSummary
 from causalpy.utils import check_convex_hull_violation
 
@@ -63,6 +68,17 @@ class SyntheticControl(BaseExperiment):
         treated unit in the pre-treatment period. Control units below this
         threshold trigger a ``UserWarning``. Defaults to ``0.0`` (warn on
         negatively correlated donors).
+    auto_scale_sigma : bool, default True
+        If ``True`` (default) and the model still carries the weighted-sum
+        fitters' stock ``y_hat`` prior, that ``sigma ~ HalfNormal(1)`` default is
+        replaced by ``sigma ~ Exponential(2/s)``. The scale is computed per
+        treated unit, with *s* the standard deviation of that unit's
+        pre-treatment data, so units on different scales are each calibrated
+        separately. Set to ``False`` to keep the original ``HalfNormal(1)``
+        default; the experiment then fits a copy of the model with that prior
+        pinned explicitly, leaving the instance you passed in untouched. A model
+        constructed with an explicit ``y_hat`` prior is never rescaled either
+        way.
     **kwargs
         Additional keyword arguments forwarded to :class:`BaseExperiment`.
 
@@ -111,6 +127,7 @@ class SyntheticControl(BaseExperiment):
         treated_units: list[str],
         model: PyMCModel | RegressorMixin | None = None,
         min_donor_correlation: float = 0.0,
+        auto_scale_sigma: bool = True,
         **kwargs: Any,
     ) -> None:
         super().__init__(model=model)
@@ -123,6 +140,9 @@ class SyntheticControl(BaseExperiment):
         self.control_units = control_units
         self.labels = control_units
         self.treated_units = treated_units
+        self.auto_scale_sigma = auto_scale_sigma
+        if not auto_scale_sigma:
+            self._pin_legacy_sigma_prior()
         # Backend-identity check is justified here: constructor-time
         # capability validation (trust boundary), not statistical dispatch.
         if self._model_backend.is_ols and len(treated_units) > 1:
@@ -288,6 +308,30 @@ class SyntheticControl(BaseExperiment):
                 ),
             }
         )
+
+    def _pin_legacy_sigma_prior(self) -> None:
+        """Swap in a model that carries the legacy noise prior explicitly.
+
+        Automatic scaling only reaches models that still declare the stock
+        ``y_hat`` default and were not given an explicit ``y_hat`` prior, so
+        those are the only models the opt-out has to touch. Expressing the
+        opt-out as an ordinary user prior on a fresh instance — rather than as a
+        fit-local flag — means it survives refits and later clones, such as the
+        ones the sensitivity checks make, and leaves the caller's own model
+        untouched.
+        """
+        model = self.model
+        if not isinstance(model, PyMCModel) or not _uses_stock_y_hat_default(model):
+            return
+        user_priors = model._user_priors or {}
+        if "y_hat" in user_priors:
+            return
+        pinned = type(model)(
+            sample_kwargs=dict(model.sample_kwargs),
+            priors={**user_priors, "y_hat": _LEGACY_Y_HAT_PRIOR},
+        )
+        self.model = pinned
+        self._model_backend = PyMCModelAdapter(pinned)
 
     def algorithm(self) -> None:
         """Run the experiment algorithm: fit model, predict, and calculate causal impact."""
