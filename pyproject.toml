@@ -161,6 +161,7 @@ markers = [
     "correctness: mark as a statistical correctness test.",
     "integration: mark as an integration test.",
     "slow: mark test as slow.",
+    "correctness: mark statistical correctness and reproducibility tests.",
 ]
 
 [tool.ruff.format]
