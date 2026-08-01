@@ -45,7 +45,7 @@ dependencies = [
     "jinja2",
     "matplotlib>=3.5.3",
     "numpy",
-    "pandas",
+    "pandas>=2.3,<4",
     "patsy",
     # Floors per the PyMC 6 migration (#1039). Deliberately NOT pymc>=6.1
     # (pymc-marketing v1.0.0 caps pymc<6.1.0, which would make the docs env
