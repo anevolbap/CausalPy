@@ -149,6 +149,8 @@ Discussions = "https://github.com/pymc-labs/CausalPy/discussions"
 [tool.pytest.ini_options]
 addopts = [
     "-vv",
+    "-m",
+    "not correctness",
     "--strict-markers",
     "--strict-config",
     "--cov=causalpy",
@@ -156,6 +158,7 @@ addopts = [
 ]
 testpaths = "causalpy/tests"
 markers = [
+    "correctness: mark as a statistical correctness test.",
     "integration: mark as an integration test.",
     "slow: mark test as slow.",
     "correctness: mark statistical correctness and reproducibility tests.",

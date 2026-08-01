@@ -142,8 +142,10 @@ jobs:
         run: pytest --doctest-modules --ignore=causalpy/tests/ causalpy/ --config-file=causalpy/tests/conftest.py --no-cov
       - name: Run extra tests
         run: pytest docs/source/.codespell/test_notebook_to_markdown.py --no-cov
+      - name: Run statistical correctness tests
+        run: pytest -o addopts='' -m correctness --cov=causalpy --cov-report= --cov-fail-under=0 --no-cov-on-fail
       - name: Run tests
-        run: pytest --cov-report=xml --no-cov-on-fail
+        run: pytest --cov-append --cov-report=xml --no-cov-on-fail
       - name: Check codespell for notebooks
         run: |
           python ./docs/source/.codespell/notebook_to_markdown.py --tempdir tmp_markdown
