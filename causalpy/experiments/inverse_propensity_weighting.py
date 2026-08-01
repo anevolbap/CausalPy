@@ -192,6 +192,22 @@ class InversePropensityWeighting(BaseExperiment):
             )
         return np.clip(ps, eps, 1 - eps)
 
+    @staticmethod
+    def _extract_propensity_draws(idata: xr.DataTree) -> xr.DataArray:
+        """Return posterior propensity draws regardless of ArviZ's container type."""
+        try:
+            extracted = az.extract(idata, var_names="p", combined=True)
+        except KeyError as err:
+            raise KeyError(
+                "Posterior propensity score variable 'p' was not found."
+            ) from err
+        if isinstance(extracted, xr.Dataset):
+            if "p" in extracted:
+                return extracted["p"]
+        elif extracted.name == "p":
+            return extracted
+        raise KeyError("Posterior propensity score variable 'p' was not found.")
+
     def make_robust_adjustments(
         self, ps: np.ndarray
     ) -> tuple[pd.Series, pd.Series, int, int]:
@@ -593,6 +609,7 @@ class InversePropensityWeighting(BaseExperiment):
             idata = self._model_backend.require_idata()
         if method is None:
             method = self.weighting_scheme
+        propensity_draws = self._extract_propensity_draws(idata)
 
         def _plot_weights(bins, top0, top1, ax, color="population"):
             colors_dict = {
@@ -601,17 +618,19 @@ class InversePropensityWeighting(BaseExperiment):
             }
 
             ax.axhline(0, c="gray", linewidth=1)
+            bin_widths = np.diff(bins)
+            bin_centers = bins[:-1] + bin_widths / 2
             bars0 = ax.bar(
-                bins[:-1] + 0.025,
+                bin_centers,
                 top0,
-                width=0.04,
+                width=bin_widths,
                 facecolor=colors_dict[color][0],
                 alpha=colors_dict[color][2],
             )
             bars1 = ax.bar(
-                bins[:-1] + 0.025,
+                bin_centers,
                 -top1,
-                width=0.04,
+                width=bin_widths,
                 facecolor=colors_dict[color][1],
                 alpha=colors_dict[color][2],
             )
@@ -620,8 +639,8 @@ class InversePropensityWeighting(BaseExperiment):
                 for bar in bars:
                     bar.set_edgecolor("black")
 
-        def _make_hists(idata, i, axs, method=method):
-            p_i = self._prepare_ps(az.extract(idata)["p"][:, i].values)
+        def _make_hists(i, axs, method=method):
+            p_i = self._prepare_ps(propensity_draws.isel(sample=i).values)
             if method == "raw":
                 weight0 = 1 / (1 - p_i[self.t.flatten() == 0])
                 weight1 = 1 / (p_i[self.t.flatten() == 1])
@@ -634,10 +653,11 @@ class InversePropensityWeighting(BaseExperiment):
                 p_of_t = np.mean(t)
                 weight1 = p_of_t / p_i[t == 1]
                 weight0 = (1 - p_of_t) / (1 - p_i[t == 0])
-            bins = np.arange(0.025, 0.99, 0.005)
+            bins = np.arange(0, 1.005, 0.005)
             top0, _ = np.histogram(p_i[self.t.flatten() == 0], bins=bins)
             top1, _ = np.histogram(p_i[self.t.flatten() == 1], bins=bins)
             _plot_weights(bins, top0, top1, axs[0])
+            observation_peak = max(top0.max(), top1.max())
             top0, _ = np.histogram(
                 p_i[self.t.flatten() == 0], bins=bins, weights=weight0
             )
@@ -645,6 +665,7 @@ class InversePropensityWeighting(BaseExperiment):
                 p_i[self.t.flatten() == 1], bins=bins, weights=weight1
             )
             _plot_weights(bins, top0, top1, axs[0], color="pseudo_population")
+            return observation_peak
 
         mosaic = """AAAAAA
                     BBBBCC"""
@@ -675,7 +696,15 @@ class InversePropensityWeighting(BaseExperiment):
             ["Treatment PS", "Control PS", "Weighted Pseudo Population", "Extreme PS"],
         )
 
-        [_make_hists(idata, i, axs) for i in range(prop_draws)]
+        peaks = [_make_hists(i, axs) for i in range(prop_draws)]
+        # Clipped extreme propensity scores give finite but enormous IPW weights,
+        # so the pseudo population mass can exceed the observation counts by
+        # orders of magnitude. On a linear axis that flattens the propensity
+        # score distribution to invisibility (issue #645). Anchoring a symmetric
+        # log scale at the observation-count peak keeps the counts linear and
+        # compresses only the mass above them, so well-behaved weights render
+        # essentially as before while inflated weights stay on the same panel.
+        axs[0].set_yscale("symlog", linthresh=max(max(peaks, default=0), 1))
         ate_df = pd.DataFrame(
             [self.get_ate(i, idata, method=method) for i in range(ate_draws)],
             columns=["ATE", "Y(1)", "Y(0)"],
@@ -792,7 +821,8 @@ class InversePropensityWeighting(BaseExperiment):
         if weighting_scheme is None:
             weighting_scheme = self.weighting_scheme
 
-        ps = self._prepare_ps(az.extract(idata)["p"].mean(dim="sample").values)
+        propensity_draws = self._extract_propensity_draws(idata)
+        ps = self._prepare_ps(propensity_draws.mean(dim="sample").values)
         X = pd.DataFrame(self.X, columns=self.labels)
         X["ps"] = ps
         t = self.t.flatten()
