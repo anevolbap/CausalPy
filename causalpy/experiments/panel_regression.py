@@ -148,7 +148,7 @@ class PanelRegression(BaseExperiment):
     ...     time_fe_variable="time",
     ...     fe_method="dummies",
     ...     model=cp.pymc_models.LinearRegression(
-    ...         sample_kwargs={"random_seed": 42, "progressbar": False}
+    ...         sample_kwargs={"random_seed": 42, "progressbar": False, "cores": 1}
     ...     ),
     ... )
 
@@ -178,7 +178,7 @@ class PanelRegression(BaseExperiment):
     ...     time_fe_variable="time",
     ...     fe_method="demeaned",
     ...     model=cp.pymc_models.LinearRegression(
-    ...         sample_kwargs={"random_seed": 42, "progressbar": False}
+    ...         sample_kwargs={"random_seed": 42, "progressbar": False, "cores": 1}
     ...     ),
     ... )
     """
