@@ -15,7 +15,6 @@
 
 import ast
 import re
-import warnings
 from typing import Any, Literal
 
 import numpy as np
@@ -72,8 +71,6 @@ class PiecewiseITS(BaseExperiment):
     model : PyMCModel or RegressorMixin, optional
         A PyMC (Bayesian) or sklearn (OLS) model. If None, defaults to a PyMC
         LinearRegression model.
-    **kwargs
-        Additional keyword arguments passed to the model.
 
     Attributes
     ----------
@@ -162,7 +159,6 @@ class PiecewiseITS(BaseExperiment):
         data: pd.DataFrame,
         formula: str,
         model: PyMCModel | RegressorMixin | None = None,
-        **kwargs: Any,
     ) -> None:
         super().__init__(model=model)
 
@@ -418,7 +414,6 @@ class PiecewiseITS(BaseExperiment):
         *,
         round_to: int | None = 2,
         ci_prob: float = HDI_PROB,
-        hdi_prob: float | None = None,
         kind: Literal["ribbon", "histogram", "spaghetti"] = "ribbon",
         ci_kind: Literal["hdi", "eti"] = "hdi",
         num_samples: int = 50,
@@ -438,8 +433,6 @@ class PiecewiseITS(BaseExperiment):
             fitted, counterfactual, causal effect, and cumulative effect
             bands. Must be in ``(0, 1]``. Ignored for OLS models. Defaults
             to :data:`~causalpy.constants.HDI_PROB` (currently 0.94).
-        hdi_prob : float, optional
-            Deprecated. Use ``ci_prob`` instead.
         kind : {"ribbon", "histogram", "spaghetti"}, optional
             How posterior uncertainty is rendered via
             :func:`~causalpy.plot_utils.plot_posterior_over_x`. Defaults to ``"ribbon"``.
@@ -473,14 +466,6 @@ class PiecewiseITS(BaseExperiment):
             The three axes (top: observed, fitted and counterfactual;
             middle: causal effect; bottom: cumulative effect).
         """
-        if hdi_prob is not None:
-            warnings.warn(
-                "hdi_prob is deprecated and will be removed in a future release. "
-                "Use ci_prob instead.",
-                FutureWarning,
-                stacklevel=2,
-            )
-            ci_prob = hdi_prob
         return self._render_plot(
             show=show,
             legend_kwargs=legend_kwargs,
@@ -661,7 +646,7 @@ class PiecewiseITS(BaseExperiment):
         plt.tight_layout()
         return fig, ax
 
-    def get_plot_data(self, hdi_prob: float = HDI_PROB) -> pd.DataFrame:
+    def get_plot_data(self, *, hdi_prob: float = HDI_PROB) -> pd.DataFrame:
         """
         Recover the data of the experiment along with prediction and effect information.
 
@@ -746,7 +731,6 @@ class PiecewiseITS(BaseExperiment):
         treated_unit: str | None = None,
         period: Literal["intervention", "post", "comparison"] | None = None,
         prefix: str = "Post-period",
-        **kwargs: Any,
     ) -> EffectSummary:
         """Generate a decision-ready summary of PiecewiseITS causal effects.
 
@@ -770,8 +754,6 @@ class PiecewiseITS(BaseExperiment):
             Not supported by PiecewiseITS; pass ``None``.
         prefix : str, default "Post-period"
             Prefix for prose generation.
-        **kwargs
-            Reserved for forward-compatibility.
         """
         from causalpy.reporting import (
             _effect_summary_timeseries,
