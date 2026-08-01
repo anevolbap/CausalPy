@@ -13,7 +13,6 @@ cp.SyntheticControl(
     model=None,
     min_donor_correlation=0.0,
     auto_scale_sigma=True,
-    **kwargs
 )
 ```
 

@@ -61,8 +61,6 @@ class SyntheticDifferenceInDifferences(BaseExperiment):
     model : PyMCModel or sklearn.base.RegressorMixin, optional
         A ``SyntheticDifferenceInDifferencesWeightFitter`` instance. Defaults
         to ``SyntheticDifferenceInDifferencesWeightFitter``.
-    **kwargs : dict
-        Additional keyword arguments (currently unused).
 
     Notes
     -----
@@ -132,7 +130,6 @@ class SyntheticDifferenceInDifferences(BaseExperiment):
         control_units: list[str],
         treated_units: list[str],
         model: PyMCModel | RegressorMixin | None = None,
-        **kwargs: dict,
     ) -> None:
         super().__init__(model=model)
         # Work on an owned frame before normalizing its index metadata.
@@ -831,7 +828,6 @@ class SyntheticDifferenceInDifferences(BaseExperiment):
         treated_unit: str | None = None,
         period: Literal["intervention", "post", "comparison"] | None = None,
         prefix: str = "Post-period",
-        **kwargs: Any,
     ) -> EffectSummary:
         """Generate a decision-ready summary of causal effects for SDiD.
 
@@ -855,8 +851,6 @@ class SyntheticDifferenceInDifferences(BaseExperiment):
             Ignored for SDiD (two-period design only).
         prefix : str, optional
             Prefix for prose generation. Defaults to "Post-period".
-        **kwargs : dict
-            Additional keyword arguments (currently unused).
 
         Returns
         -------
